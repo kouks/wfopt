@@ -283,6 +283,8 @@ def apply_ops(
         if op.kind == CREATE:
             body: dict[str, Any] = {
                 "itemId": op.item_id, "type": "sell", "platinum": op.price, "quantity": op.qty,
+                # required by v2; 1 = buyers can take single copies at the per-unit price we computed
+                "perTrade": 1,
                 "visible": cfg.sync.post_visible,
             }
             if op.rank is not None:

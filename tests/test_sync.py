@@ -71,6 +71,7 @@ def test_apply_writes_logs_and_stops_on_4xx(cfg):
     assert n == 2 and delete.called and post.call_count == 2
     sent = json.loads(post.calls[0].request.content)
     assert sent["type"] == "sell" and sent["visible"] is True and sent.get("rank") in (5, None)
+    assert sent["perTrade"] == 1  # v2 rejects creates without it (app.field.required)
     assert post.calls[0].request.headers["Authorization"] == "Bearer secret-token"
     assert "Stopped" in out[-1] and "bad rank" in out[-1]
     log = (cfg.out_dir / "sync-log.jsonl").read_text()

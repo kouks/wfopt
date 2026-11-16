@@ -12,8 +12,10 @@ from wfopt.sync.listings import (
 )
 
 
-def row(item_id, action, qty, price, rank=None, max_rank=None):
-    return Row(item_id, item_id, item_id.title(), "mod", action, qty, rank, price, max_rank=max_rank)
+def row(item_id, action, qty, price, rank=None, max_rank=None, priority=0.0):
+    r = Row(item_id, item_id, item_id.title(), "mod", action, qty, rank, price, max_rank=max_rank)
+    r.priority = priority
+    return r
 
 
 def test_desired_aggregates_and_filters():
@@ -104,3 +106,31 @@ def test_auth_bad_jwt_and_no_creds(cfg, monkeypatch):
     respx.get(f"{API}/v2/me").mock(return_value=httpx.Response(401))
     with WfmClient(cfg) as c, pytest.raises(AuthError):
         authenticate(cfg, c, jwt="JWT nope")
+
+
+def test_limit_keeps_top_priority_and_counts_unmanaged_orders():
+    rows = [row(f"i{n}", LIST, 1, 10 + n, priority=float(n)) for n in range(6)]  # i5 is the best
+    desired = desired_from_rows(rows)
+    assert list(desired)[0] == ("i5", None)  # highest priority first
+    orders = [
+        {"id": "m1", "type": "sell", "itemId": "manual", "platinum": 5, "quantity": 1},  # manual, untouched
+        {"id": "b1", "type": "buy", "itemId": "x", "platinum": 5, "quantity": 1},  # buy order uses a slot
+        {"id": "t0", "type": "sell", "itemId": "i0", "platinum": 10, "quantity": 1},  # tool listing, now out of the top
+        {"id": "t4", "type": "sell", "itemId": "i4", "platinum": 14, "quantity": 1},  # tool listing, still in the top
+    ]
+    state = SyncState({"t0": {}, "t4": {}})
+    ops = diff(desired, orders, state, limit=5)  # 5 - 2 unmanaged = 3 slots: i5, i4, i3
+    kinds = [(o.kind, o.item_id) for o in ops]
+    assert kinds[0] == (DELETE, "i0")  # deletes run first to free slots
+    assert (CREATE, "i5") in kinds and (CREATE, "i3") in kinds
+    assert not any(k == CREATE and i in ("i0", "i1", "i2", "i4") for k, i in kinds)
+    assert not any(o.order_id == "t4" for o in ops)  # in the top and priced right -> untouched
+    after = len(orders) - sum(o.kind == DELETE for o in ops) + sum(o.kind == CREATE for o in ops)
+    assert after == 5
+    assert "outside the top 5" in next(o for o in ops if o.item_id == "i0").reason
+
+
+def test_limit_is_capped_at_100():
+    rows = [row(f"i{n}", LIST, 1, 10, priority=float(n)) for n in range(150)]
+    ops = diff(desired_from_rows(rows), [], SyncState(), limit=500)
+    assert sum(o.kind == CREATE for o in ops) == 100

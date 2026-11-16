@@ -270,10 +270,10 @@ listings_app = typer.Typer(no_args_is_help=True, help="Sync your WFM sell listin
 app.add_typer(listings_app, name="listings")
 
 
-def _listing_ops(cfg: Config, jwt: Optional[str], strategy: Optional[str]):
+def _listing_ops(cfg: Config, jwt: Optional[str], strategy: Optional[str], limit: int):
     from wfopt.pipeline import run
     from wfopt.sync.auth import AuthError, authenticate
-    from wfopt.sync.listings import SyncState, desired_from_rows, diff, fetch_my_orders, state_path
+    from wfopt.sync.listings import SyncState, desired_from_rows, diff, fetch_my_orders, is_managed, state_path
 
     inv, _ = _load_holdings(cfg)
     client = _client(cfg)
@@ -291,7 +291,9 @@ def _listing_ops(cfg: Config, jwt: Optional[str], strategy: Optional[str]):
     orders = fetch_my_orders(client)
     state = SyncState.load(state_path(cfg))
     names = {iid: ci.item.name for iid, ci in rep.classified.items.items()}
-    ops = diff(desired, orders, state, cfg.sync.manage_only_tool_orders, names)
+    ops = diff(desired, orders, state, cfg.sync.manage_only_tool_orders, names, limit)
+    fixed = sum(1 for o in orders if not is_managed(o, state, cfg.sync.manage_only_tool_orders))
+    console.print(f"Listing the top {limit} recommendations ({len(desired)} wanted; {fixed} of your orders aren't managed by the tool and use slots too).")
     return client, ops, state
 
 
@@ -313,9 +315,10 @@ def _print_ops(ops) -> None:
 def listings_diff(
     jwt: Optional[str] = typer.Option(None, "--jwt", help="JWT cookie value (fallback if sign-in fails)"),
     strategy: Optional[str] = typer.Option(None, "--strategy"),
+    limit: int = typer.Option(100, "--limit", min=1, max=100, help="Max open orders after syncing (WFM allows 100). Top recommendations by priority win."),
 ) -> None:
     """Compare /v2/orders/my with the recommendations: creates, updates and deletes."""
-    client, ops, _ = _listing_ops(_cfg(), jwt, strategy)
+    client, ops, _ = _listing_ops(_cfg(), jwt, strategy, limit)
     client.close()
     _print_ops(ops)
 
@@ -325,12 +328,13 @@ def listings_apply(
     yes: bool = typer.Option(False, "--yes", help="Actually write. Without it this is a dry run."),
     jwt: Optional[str] = typer.Option(None, "--jwt"),
     strategy: Optional[str] = typer.Option(None, "--strategy"),
+    limit: int = typer.Option(100, "--limit", min=1, max=100, help="Max open orders after syncing (WFM allows 100). Top recommendations by priority win."),
 ) -> None:
     """Dry run by default. With --yes, apply changes and log them to out/sync-log.jsonl."""
     from wfopt.sync.listings import SKIP, apply_ops
 
     cfg = _cfg()
-    client, ops, state = _listing_ops(cfg, jwt, strategy)
+    client, ops, state = _listing_ops(cfg, jwt, strategy, limit)
     try:
         _print_ops(ops)
         writes = [op for op in ops if op.kind != SKIP]

@@ -20,7 +20,7 @@ copy .env.example .env                 # only needed for `wfopt listings`
 | `wfopt prices [--refresh]`                      | Fetch statistics and order books for every surplus item (rate limited, cached)  |
 | `wfopt report [--strategy quick\|balanced\|patient] [--open]` | Write `out/report-*.csv` and `.html`, print the top 20 and today's plan |
 | `wfopt listings diff [--jwt ...]`               | Compare your WFM sell orders with the recommendations                          |
-| `wfopt listings apply [--yes]`                  | Dry run unless `--yes`. Logs every write to `out/sync-log.jsonl`               |
+| `wfopt listings apply [--yes] [--limit N]`       | Dry run unless `--yes`. Syncs the top N listings (default and max 100). Logs writes to `out/sync-log.jsonl` |
 
 The first `prices`/`report` run makes about 1–2k requests at 2.5 req/s (10–15 minutes). Responses are cached on disk (`cache/`), so an interrupted run resumes and later runs within the TTLs are fast.
 

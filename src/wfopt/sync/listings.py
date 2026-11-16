@@ -17,6 +17,9 @@ SYNC_ACTIONS = (LIST, FUSE, MAX)
 CREATE, UPDATE, DELETE, SKIP = "create", "update", "delete", "skip"
 
 
+WFM_MAX_ORDERS = 100  # warframe.market's cap on open orders per account
+
+
 @dataclass
 class Desired:
     item_id: str
@@ -26,6 +29,7 @@ class Desired:
     qty: int
     price: int
     subtype: str | None = None
+    priority: float = 0.0
 
 
 @dataclass
@@ -76,23 +80,33 @@ def state_path(cfg: Config) -> Path:
 
 
 def desired_from_rows(rows: list[Row], subtypes: dict[str, str | None] | None = None) -> dict[tuple[str, int | None], Desired]:
-    """Aggregate List / Fuse / Max rows by (itemId, rank). Quantities are already capped by the engine."""
+    """Aggregate List / Fuse / Max rows by (itemId, rank), highest priority first.
+
+    Quantities are already capped by the engine.
+    """
     out: dict[tuple[str, int | None], Desired] = {}
-    for r in rows:
+    for r in sorted(rows, key=lambda r: -r.priority):
         if r.action not in SYNC_ACTIONS or not r.price or r.qty <= 0:
             continue
         rank = r.rank if r.max_rank is not None else None
         key = (r.item_id, rank)
         if key in out:
             out[key].qty += r.qty
-            out[key].price = max(out[key].price, r.price)
+            out[key].price = max(out[key].price, int(r.price))
         else:
-            out[key] = Desired(r.item_id, r.slug, r.name, rank, r.qty, r.price, (subtypes or {}).get(r.item_id))
+            out[key] = Desired(
+                r.item_id, r.slug, r.name, rank, r.qty, int(r.price), (subtypes or {}).get(r.item_id), r.priority
+            )
     return out
 
 
 def price_off(old: int, new: int) -> bool:
     return abs(old - new) > max(2, 0.05 * new)
+
+
+def is_managed(o: dict[str, Any], state: SyncState, manage_only_tool_orders: bool = True) -> bool:
+    """Sell orders the tool may change. Buy orders and (by default) manual listings are never touched."""
+    return o.get("type") == "sell" and (not manage_only_tool_orders or o.get("id") in state.managed)
 
 
 def diff(
@@ -101,48 +115,71 @@ def diff(
     state: SyncState,
     manage_only_tool_orders: bool = True,
     names: dict[str, str] | None = None,
+    limit: int = WFM_MAX_ORDERS,
 ) -> list[Op]:
+    """Ops that bring the tool's listings in line with the top `limit` recommendations.
+
+    Orders the tool doesn't manage (manual sell orders, buy orders) stay and use up slots first.
+    Deletes come first in the result so the account never goes over the cap while applying.
+    """
     names = names or {}
+    limit = max(0, min(limit, WFM_MAX_ORDERS))
     sells = [o for o in orders if o.get("type") == "sell"]
     by_key: dict[tuple[str, int | None], list[dict]] = {}
     for o in sells:
         by_key.setdefault((o.get("itemId", ""), o.get("rank")), []).append(o)
 
     def managed(o: dict) -> bool:
-        return not manage_only_tool_orders or o.get("id") in state.managed
+        return is_managed(o, state, manage_only_tool_orders)
 
-    ops: list[Op] = []
-    seen: set[str] = set()
-    for key, d in sorted(desired.items(), key=lambda kv: kv[1].name):
+    fixed = [o for o in orders if not managed(o)]  # stays no matter what
+    slots = limit - len(fixed)
+
+    creates: list[Op] = []
+    updates: list[Op] = []
+    deletes: list[Op] = []
+    skips: list[Op] = []
+    kept: set[str] = set()
+    for key, d in sorted(desired.items(), key=lambda kv: -kv[1].priority):
         existing = by_key.get(key, [])
-        seen.update(o["id"] for o in existing if "id" in o)
         mine = [o for o in existing if managed(o)]
-        if not existing:
-            ops.append(Op(CREATE, d.item_id, d.name, d.rank, price=d.price, qty=d.qty, subtype=d.subtype))
-            continue
-        if not mine:
+        if existing and not mine:
             o = existing[0]
-            ops.append(
+            skips.append(
                 Op(SKIP, d.item_id, d.name, d.rank, o.get("id"), d.price, d.qty, o.get("platinum"), o.get("quantity"),
                    reason=f"you already list it manually at {o.get('platinum')}p × {o.get('quantity')}; not touching it")
             )
             continue
+        if slots <= 0:
+            if not mine:
+                skips.append(Op(SKIP, d.item_id, d.name, d.rank, price=d.price, qty=d.qty,
+                                reason=f"outside the top {limit} listings"))
+            continue  # an existing tool listing here is deleted below
+        slots -= 1
+        if not mine:
+            creates.append(Op(CREATE, d.item_id, d.name, d.rank, price=d.price, qty=d.qty, subtype=d.subtype))
+            continue
         o = mine[0]
+        kept.add(o["id"])
         op_, oq = int(o.get("platinum") or 0), int(o.get("quantity") or 0)
         if price_off(op_, d.price) or oq != d.qty:
-            ops.append(Op(UPDATE, d.item_id, d.name, d.rank, o["id"], d.price, d.qty, op_, oq))
-        for extra in mine[1:]:
-            ops.append(Op(DELETE, d.item_id, d.name, d.rank, extra["id"], old_price=extra.get("platinum"),
-                          old_qty=extra.get("quantity"), reason="duplicate tool listing"))
+            updates.append(Op(UPDATE, d.item_id, d.name, d.rank, o["id"], d.price, d.qty, op_, oq))
 
     for o in sells:
-        if o.get("id") in seen or not managed(o):
+        if not managed(o) or o.get("id") in kept:
             continue
-        ops.append(
+        key = (o.get("itemId", ""), o.get("rank"))
+        if key not in desired:
+            reason = "no surplus left"
+        elif any(k.get("id") in kept for k in by_key.get(key, [])):
+            reason = "duplicate tool listing"
+        else:
+            reason = f"outside the top {limit} listings"
+        deletes.append(
             Op(DELETE, o.get("itemId", ""), names.get(o.get("itemId", ""), o.get("itemId", "")), o.get("rank"), o.get("id"),
-               old_price=o.get("platinum"), old_qty=o.get("quantity"), reason="no surplus left")
+               old_price=o.get("platinum"), old_qty=o.get("quantity"), reason=reason)
         )
-    return ops
+    return deletes + updates + creates + skips
 
 
 def fetch_my_orders(client: WfmClient) -> list[dict[str, Any]]:

@@ -361,7 +361,9 @@ def listings_apply(
     limit: Optional[int] = typer.Option(None, "--limit", min=1, max=100, help=LIMIT_HELP),
 ) -> None:
     """Dry run saves a draft; --yes applies that draft as reviewed and logs to out/sync-log.jsonl."""
-    from wfopt.sync.listings import SKIP, SyncState, apply_ops, discard_draft, draft_problem, fetch_my_orders, load_draft, state_path
+    from wfopt.sync.listings import (
+        SKIP, SyncState, apply_ops, discard_draft, draft_problem, fetch_my_orders, load_draft, save_draft, state_path,
+    )
 
     cfg = _cfg()
     client, me = _auth(cfg, jwt)
@@ -391,9 +393,18 @@ def listings_apply(
             discard_draft(cfg)
             return
         state = SyncState.load(state_path(cfg))
-        n = apply_ops(cfg, client, draft.ops, state, cfg.out_dir / "sync-log.jsonl", echo=console.print)
-        discard_draft(cfg)  # orders changed now, so the draft is spent either way
+        n, remaining = apply_ops(cfg, client, draft.ops, state, cfg.out_dir / "sync-log.jsonl", echo=console.print)
         console.print(f"Applied {n}/{len(writes)} change(s). Log: {cfg.out_dir / 'sync-log.jsonl'}")
+        if remaining:
+            # keep the rest as the draft, against the orders as they are now, so --yes resumes from the failure
+            save_draft(cfg, remaining, fetch_my_orders(client), draft.user_id, draft.limit, draft.strategy, draft.created_at)
+            left = sum(op.kind != SKIP for op in remaining)
+            console.print(
+                f"Kept the {left} unapplied change(s) as the draft. Fix the cause and run "
+                "[bold]wfopt listings apply --yes[/bold] again to resume."
+            )
+        else:
+            discard_draft(cfg)
     finally:
         client.close()
 

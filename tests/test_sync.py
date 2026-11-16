@@ -67,8 +67,9 @@ def test_apply_writes_logs_and_stops_on_4xx(cfg):
     out = []
     with WfmClient(cfg) as c:
         c.token = "secret-token"
-        n = apply_ops(cfg, c, ops, state, cfg.out_dir / "sync-log.jsonl", echo=out.append)
+        n, remaining = apply_ops(cfg, c, ops, state, cfg.out_dir / "sync-log.jsonl", echo=out.append)
     assert n == 2 and delete.called and post.call_count == 2
+    assert [op.kind for op in remaining] == [CREATE] and remaining[0].item_id == "b"  # failed op first
     sent = json.loads(post.calls[0].request.content)
     assert sent["type"] == "sell" and sent["visible"] is True and sent.get("rank") in (5, None)
     # WFM v2: perTrade is required for bulk-tradable items (arcane "a") and not allowed otherwise (set "b")
@@ -191,3 +192,46 @@ def test_apply_yes_uses_draft_without_market_calls(tmp_path, monkeypatch):
 
     res = CliRunner().invoke(app, ["listings", "apply", "--yes"])  # no draft left -> refuse, no writes
     assert res.exit_code == 1 and "no draft found" in res.output and post.call_count == 1
+
+
+@respx.mock
+def test_failed_apply_keeps_rest_of_draft_and_resumes(tmp_path, monkeypatch):
+    from typer.testing import CliRunner
+
+    from wfopt.cli import app
+    from wfopt.config import load_config
+    from wfopt.sync.listings import Op, load_draft, save_draft
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("WFM_JWT", "tok")
+    cfg = load_config(root=tmp_path)
+    live = list(_orders())
+    respx.get(f"{API}/v2/me").mock(return_value=httpx.Response(200, json={"data": {"ingameName": "kouks", "id": "u1"}}))
+    respx.get(f"{API}/v2/orders/my").mock(side_effect=lambda req: httpx.Response(200, json={"data": live}))
+
+    def create(req):
+        body = json.loads(req.content)
+        if body["itemId"] == "bad" and "fixed" not in req.headers.get("X-Test", ""):
+            return httpx.Response(400, json={"error": {"inputs": {"perTrade": "app.field.notAllowed"}}})
+        oid = f"n{len(live)}"
+        live.append({"id": oid, "type": "sell", "itemId": body["itemId"], "platinum": body["platinum"], "quantity": body["quantity"]})
+        return httpx.Response(200, json={"data": {"id": oid}})
+
+    post = respx.post(f"{API}/v2/order").mock(side_effect=create)
+    ops = [Op(CREATE, i, i.upper(), None, price=20, qty=1) for i in ("ok1", "bad", "ok2")]
+    first = save_draft(cfg, ops, live, "u1", 100, "balanced")
+
+    res = CliRunner().invoke(app, ["listings", "apply", "--yes"])
+    assert res.exit_code == 0, res.output
+    assert "Kept the 2 unapplied change(s)" in res.output
+    d = load_draft(cfg)
+    assert [o.item_id for o in d.ops] == ["bad", "ok2"] and d.created_at == first.created_at
+
+    # "fix" the cause, then --yes resumes without a new dry run despite the order created above
+    respx.post(f"{API}/v2/order").mock(
+        side_effect=lambda req: create(httpx.Request("POST", req.url, headers={"X-Test": "fixed"}, content=req.content))
+    )
+    res = CliRunner().invoke(app, ["listings", "apply", "--yes"])
+    assert res.exit_code == 0, res.output
+    assert {o["itemId"] for o in live} >= {"ok1", "bad", "ok2"}
+    assert load_draft(cfg) is None

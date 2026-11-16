@@ -216,8 +216,18 @@ def orders_fingerprint(orders: list[dict[str, Any]]) -> list[list[Any]]:
     )
 
 
-def save_draft(cfg: Config, ops: list[Op], orders: list[dict[str, Any]], user_id: str, limit: int, strategy: str) -> Draft:
-    d = Draft(time.time(), user_id, limit, strategy, orders_fingerprint(orders), ops)
+def save_draft(
+    cfg: Config,
+    ops: list[Op],
+    orders: list[dict[str, Any]],
+    user_id: str,
+    limit: int,
+    strategy: str,
+    created_at: float | None = None,
+) -> Draft:
+    """Save ops as the draft. `created_at` is kept when re-saving a partly applied draft, so
+    the age limit still counts from when the prices were fetched."""
+    d = Draft(created_at or time.time(), user_id, limit, strategy, orders_fingerprint(orders), ops)
     p = draft_path(cfg)
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(json.dumps({**asdict(d), "ops": [asdict(o) for o in ops]}, indent=1), encoding="utf-8")
@@ -278,11 +288,14 @@ def apply_ops(
     state: SyncState,
     log_path: Path,
     echo: Callable[[str], None] = print,
-) -> int:
-    """Execute writes in order. Stops at the first 4xx/5xx and prints the error body. Returns writes done."""
+) -> tuple[int, list[Op]]:
+    """Execute writes in order. Stops at the first 4xx/5xx and prints the error body.
+
+    Returns (writes done, ops not applied yet: the failed one first), so a failed run can resume.
+    """
     log_path.parent.mkdir(parents=True, exist_ok=True)
     done = 0
-    for op in ops:
+    for i, op in enumerate(ops):
         if op.kind == SKIP:
             continue
         if op.kind == CREATE:
@@ -312,7 +325,7 @@ def apply_ops(
             _log(log_path, entry)
             echo(f"Stopped: {op.describe()} -> HTTP {resp.status_code}: {resp.text[:1000]}")
             state.save(state_path(cfg))
-            return done
+            return done, ops[i:]
         if op.kind == CREATE:
             try:
                 oid = (v2_data(resp.json()) or {}).get("id")
@@ -327,7 +340,7 @@ def apply_ops(
         echo(f"ok: {op.describe()}")
         done += 1
     state.save(state_path(cfg))
-    return done
+    return done, []
 
 
 def _log(path: Path, entry: dict[str, Any]) -> None:

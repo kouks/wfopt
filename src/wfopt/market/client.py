@@ -42,6 +42,10 @@ class RateLimiter:
             now = self._next
         self._next = now + self.interval
 
+    def slow_down(self, factor: float = 2.0, max_interval: float = 30.0) -> None:
+        """Called on 429: lower this limiter's rate for the rest of the run."""
+        self.interval = min(max(self.interval, 0.1) * factor, max_interval)
+
 
 @dataclass
 class CacheEntry:
@@ -96,6 +100,8 @@ class WfmClient:
         }
         self.http = http or httpx.Client(timeout=30.0)
         self.limiter = limiter or RateLimiter(w.rps)
+        # Riven auction search is limited far more strictly than the rest of the API (Cloudflare 1015 bans).
+        self.slow_limiters: dict[str, RateLimiter] = {"/v1/auctions": RateLimiter(w.auction_rps)}
         self.cache = DiskCache(cfg.cache_dir / "http")
         self._sleep = sleep
         self.max_retries = max_retries
@@ -133,8 +139,10 @@ class WfmClient:
             headers.update(extra_headers)
         delay = 1.0
         last_exc: Exception | None = None
+        rel = url[len(API):] if url.startswith(API) else url
+        limiter = next((lim for prefix, lim in self.slow_limiters.items() if rel.startswith(prefix)), self.limiter)
         for attempt in range(self.max_retries + 1):
-            self.limiter.acquire()
+            limiter.acquire()
             self.network_calls += 1
             try:
                 resp = self.http.request(method, url, params=params, json=json_body, headers=headers)
@@ -146,6 +154,8 @@ class WfmClient:
             if attempt == self.max_retries:
                 break
             wait = delay
+            if resp is not None and resp.status_code == 429:
+                limiter.slow_down(1.5, 60.0 if limiter is not self.limiter else 30.0)
             if resp is not None:
                 ra = resp.headers.get("Retry-After")
                 if ra and ra.isdigit():
@@ -164,8 +174,9 @@ class WfmClient:
         ttl_minutes: float = 0,
         refresh: bool = False,
         allow_404: bool = False,
+        text: bool = False,
     ) -> Any:
-        """GET with disk cache. `ttl_minutes <= 0` disables caching."""
+        """GET with disk cache. `ttl_minutes <= 0` disables caching. `text=True` returns the raw body."""
         key = self._key(path, params)
         if ttl_minutes > 0 and not refresh:
             hit = self.cache.get(key)
@@ -177,7 +188,7 @@ class WfmClient:
         elif resp.status_code >= 400:
             raise WfmError(f"GET {path} -> {resp.status_code}", resp.status_code, resp.text[:500])
         else:
-            body = resp.json()
+            body = resp.text if text else resp.json()
         if ttl_minutes > 0:
             self.cache.put(key, body)
         return body

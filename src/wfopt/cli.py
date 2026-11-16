@@ -268,6 +268,52 @@ def report(
         webbrowser.open(html_path.resolve().as_uri())
 
 
+@app.command()
+def rivens(
+    refresh: bool = typer.Option(False, "--refresh", help="Ignore caches"),
+    open_: bool = typer.Option(False, "--open", help="Open the HTML page in the browser"),
+    top: int = typer.Option(25, "--top", help="Rows to print in the terminal"),
+) -> None:
+    """Estimate your unveiled rivens from similar WFM auctions and DE's weekly trade stats."""
+    from datetime import datetime
+
+    from rich.progress import BarColumn, MofNCompleteColumn, Progress, TextColumn, TimeRemainingColumn
+
+    from wfopt.pipeline import run_rivens
+    from wfopt.report.rivens_out import write_csv, write_html
+
+    cfg = _cfg()
+    inv, _ = _load_holdings(cfg)
+    cols = (TextColumn("{task.description}"), BarColumn(), MofNCompleteColumn(), TimeRemainingColumn())
+    with _client(cfg) as client, Progress(*cols, console=console, transient=True) as prog:
+        task = prog.add_task("Rivens", total=None)
+        rows = run_rivens(cfg, client, inv, refresh=refresh, progress=lambda d, n: prog.update(task, completed=d, total=n))
+        calls = client.network_calls
+
+    t = Table(title=f"Riven estimates (top {min(top, len(rows))} of {len(rows)})")
+    for h, j in [("Weapon", "left"), ("Stats", "left"), ("Est.", "right"), ("Conf.", "left"), ("Similar", "right"),
+                 ("Cheapest", "right"), ("DE med", "right"), ("Roll %", "right"), ("Rerolls", "right"), ("Note", "left")]:
+        t.add_column(h, justify=j, overflow="fold", max_width=48 if h in ("Stats", "Note") else None)
+    for e in rows[:top]:
+        t.add_row(
+            e.weapon_name, e.stats, "" if e.estimate is None else f"{e.estimate:.0f}", e.confidence, str(e.comps),
+            "" if e.cheapest is None else str(e.cheapest), "" if e.de_median is None else f"{e.de_median:.0f}",
+            "" if e.riven.buff_roll is None else f"{100 * e.riven.buff_roll:.0f}", str(e.riven.rerolls), "; ".join(e.notes),
+        )
+    console.print(t)
+    stamp = datetime.now().strftime("%Y%m%d-%H%M")
+    csv_path = write_csv(rows, cfg.out_dir / f"rivens-{stamp}.csv")
+    html_path = write_html(rows, cfg.out_dir / f"rivens-{stamp}.html", datetime.now().strftime("%Y-%m-%d %H:%M"))
+    console.print(
+        f"≈{sum(e.estimate or 0 for e in rows):.0f}p across {len(rows)} rivens. Wrote [bold]{csv_path}[/bold] and "
+        f"[bold]{html_path}[/bold] ({calls} network calls)"
+    )
+    if open_:
+        import webbrowser
+
+        webbrowser.open(html_path.resolve().as_uri())
+
+
 listings_app = typer.Typer(no_args_is_help=True, help="Sync your WFM sell listings to the recommendations")
 app.add_typer(listings_app, name="listings")
 

@@ -17,6 +17,7 @@ def load_fixture(name: str):
 def cfg(tmp_path) -> Config:
     c = Config(root=tmp_path)
     c.wfm.rps = 1000  # tests don't need real throttling unless they test it
+    c.wfm.auction_rps = 1000
     return c
 
 

@@ -23,6 +23,7 @@ class WfmCfg:
     ingame_name: str = ""
     user_agent: str = "wf-trade-optimizer/0.1 (local personal trade report tool)"
     rps: float = 2.5
+    auction_rps: float = 0.067  # riven auction search: one request every ~15 s (Cloudflare blocks faster use)
 
 
 @dataclass
@@ -31,6 +32,9 @@ class CacheTtlCfg:
     sets: float = 10080
     statistics: float = 360
     top_orders: float = 10
+    riven_catalog: float = 10080
+    riven_weekly: float = 1440  # DE's weekly riven trade stats
+    auctions: float = 1440  # riven prices move slowly; the search endpoint is heavily rate limited
 
 
 @dataclass

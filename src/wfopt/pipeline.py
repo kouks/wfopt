@@ -84,3 +84,52 @@ def run(
         network_calls=client.network_calls,
         extra={"never_sell_unknown": unknown_never_sell(cfg, catalog)},
     )
+
+
+def run_rivens(
+    cfg: Config,
+    client: WfmClient,
+    inv: InventoryFile,
+    *,
+    refresh: bool = False,
+    progress: Callable[[int, int], None] | None = None,
+) -> list:
+    """Estimate every unveiled riven. Up to 3 auction searches per riven, deduplicated and cached."""
+    from wfopt.engine.rivens import EXACT, MIN_COMPS, POSITIVES, WEAPON, describe, estimate, matching
+    from wfopt.inventory.rivens import parse_rivens
+    from wfopt.market.rivens import fetch_riven_catalog, fetch_weekly, search_auctions
+
+    rivens = parse_rivens(inv.data)
+    cat = fetch_riven_catalog(client, cfg, refresh=refresh)
+    weekly = fetch_weekly(client, cfg, refresh=refresh)
+    seen: dict[tuple, list | None] = {}
+
+    def search(params: dict[str, str] | None):
+        if params is None:
+            return None
+        key = tuple(sorted(params.items()))
+        if key not in seen:
+            seen[key] = search_auctions(client, cfg, params, refresh=refresh)
+        return seen[key]
+
+    out = []
+    for i, r in enumerate(rivens, 1):
+        est = describe(r, cat)
+        results = {EXACT: search(est.tier_params(EXACT))}
+        if est.searchable and len(matching(est, EXACT, results[EXACT])) < MIN_COMPS:
+            results[POSITIVES] = search(est.tier_params(POSITIVES))
+        found = max(len(matching(est, t, results.get(t))) for t in (EXACT, POSITIVES))
+        if found < MIN_COMPS and not _has_weekly(weekly, est):
+            results[WEAPON] = search(est.tier_params(WEAPON))  # last resort: the weapon's cheapest riven
+        out.append(estimate(est, results, weekly))
+        if progress:
+            progress(i, len(rivens))
+    if weekly is None:
+        for e in out:
+            e.notes.append("DE weekly riven stats unavailable")
+    out.sort(key=lambda e: -(e.estimate or 0))
+    return out
+
+
+def _has_weekly(weekly, est) -> bool:
+    return bool(weekly) and any((est.weapon_name.lower(), rr) in weekly for rr in (True, False))

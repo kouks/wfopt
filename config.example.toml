@@ -9,12 +9,16 @@ language = "en"
 ingame_name = ""          # for reading your public listings without logging in
 user_agent = "wf-trade-optimizer/0.1 (local personal trade report tool)"
 rps = 2.5
+auction_rps = 0.067         # riven auction search: ~1 per 15 s, Cloudflare blocks faster use
 
 [cache_ttl_minutes]
 catalog = 10080           # also invalidated by /v2/versions
 sets = 10080
 statistics = 360
 top_orders = 10
+riven_catalog = 10080
+riven_weekly = 1440       # DE's weekly riven trade stats
+auctions = 1440            # riven searches are slow to fetch and prices move slowly
 
 [pricing]
 strategy = "balanced"     # quick | balanced | patient

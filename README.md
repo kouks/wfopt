@@ -19,11 +19,24 @@ copy .env.example .env                 # only needed for `wfopt listings`
 | `wfopt catalog [--refresh]`                     | Load the WFM catalogue and set compositions, print mapping stats               |
 | `wfopt prices [--refresh]`                      | Fetch statistics and order books for every surplus item (rate limited, cached)  |
 | `wfopt report [--strategy quick\|balanced\|patient] [--open]` | Write `out/report-*.csv` and `.html`, print the top 20 and today's plan |
+| `wfopt rivens [--open]`                         | Estimate your unveiled rivens from similar warframe.market auctions and DE's weekly riven trades |
 | `wfopt listings diff [--jwt ...]`               | Compare your WFM sell orders with the recommendations and save a draft         |
 | `wfopt listings apply [--limit N]`              | Dry run: plans the top N listings (default and max 100) and saves them as a draft |
 | `wfopt listings apply --yes`                    | Applies the saved draft exactly as reviewed (no prices recomputed). Logs writes to `out/sync-log.jsonl` |
 
 The first `prices`/`report` run makes about 1–2k requests at 2.5 req/s (10–15 minutes). Responses are cached on disk (`cache/`), so an interrupted run resumes and later runs within the TTLs are fast.
+
+## Rivens
+
+`wfopt rivens` estimates each unveiled riven in three steps, stopping at the first that finds at least 3 rivens for sale:
+
+1. Auctions for the same weapon with the same positive stats and the same negative (or no negative).
+2. The same positive stats with any negative.
+3. DE's weekly riven trade median for the weapon (rerolled vs unrolled). If DE has no entry, the cheapest riven listed for the weapon.
+
+Each row shows a confidence label, the roll quality of its stats (0–100% within each stat's range), and a link to the matching search on warframe.market. These are asking prices, not sales, so treat estimates as a starting point.
+
+The auction search is rate limited much more strictly than the rest of the API (Cloudflare blocks fast use). Searches run at about one per 15 s (`wfm.auction_rps`) and are cached for 24 h, so the first run takes about 30–40 minutes. It is resumable, and later runs are instant. Output goes to `out/rivens-*.csv` and `.html`.
 
 ## Notes
 

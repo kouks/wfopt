@@ -57,6 +57,8 @@ class ValuationCfg:
 class ScopeCfg:
     categories: list[str] = field(default_factory=lambda: ["prime", "arcane", "mod"])
     arcane_ranked_copies_fusable: bool = True
+    # items to keep every copy of (never sell, list or ducat): WFM slugs or display names, any case
+    never_sell: list[str] = field(default_factory=list)
 
 
 @dataclass

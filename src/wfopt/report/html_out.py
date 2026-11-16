@@ -109,6 +109,9 @@ def render_html(report: Report) -> str:
             f'<p class="warn">Inventory file is {report.inventory_age_hours:.1f} h old. AlecaFrame refreshes it at login '
             "and loading screens.</p>"
         )
+    unknown = report.extra.get("never_sell_unknown") or []
+    if unknown:
+        age_warn += f'<p class="warn">never_sell entries that match no item: {html.escape(", ".join(unknown))}</p>'
     plan_rows = [
         [e.row.name, e.row.action, e.qty, "" if e.row.rank is None else e.row.rank, e.row.price, e.trades, round(e.net, 1), e.row.whisper]
         for e in report.plan.entries

@@ -255,6 +255,8 @@ def report(
     if strategy and strategy not in ("quick", "balanced", "patient"):
         raise typer.BadParameter("strategy must be quick, balanced or patient")
     rep = _run_report(cfg, strategy, refresh)
+    if rep.extra.get("never_sell_unknown"):
+        console.print(f"[yellow]never_sell entries that match no item: {', '.join(rep.extra['never_sell_unknown'])}[/yellow]")
     stamp = datetime.now().strftime("%Y%m%d-%H%M")
     csv_path = write_csv(rep, cfg.out_dir / f"report-{stamp}.csv")
     html_path = write_html(rep, cfg.out_dir / f"report-{stamp}.html")

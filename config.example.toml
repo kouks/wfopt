@@ -35,6 +35,7 @@ liquidity_ref = 5
 [scope]
 categories = ["prime", "arcane", "mod"]
 arcane_ranked_copies_fusable = true
+never_sell = []             # keep every copy, e.g. ["overextended", "Arcane Grace"]
 
 [sync]                    # stretch goal
 post_visible = true

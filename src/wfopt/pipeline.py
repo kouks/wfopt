@@ -7,7 +7,7 @@ from typing import Callable
 
 from wfopt.config import Config
 from wfopt.engine.classify import PRIME, classify_holdings
-from wfopt.engine.plan import build_rows, compute_keeps, daily_plan, daily_trades, price_needs
+from wfopt.engine.plan import build_rows, compute_keeps, daily_plan, daily_trades, price_needs, unknown_never_sell
 from wfopt.inventory.aleca import InventoryFile
 from wfopt.inventory.normalize import normalize
 from wfopt.market.catalog import fetch_catalog, fetch_sets
@@ -82,4 +82,5 @@ def run(
         quotes=quotes,
         listings=listings,
         network_calls=client.network_calls,
+        extra={"never_sell_unknown": unknown_never_sell(cfg, catalog)},
     )

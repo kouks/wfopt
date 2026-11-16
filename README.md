@@ -28,6 +28,7 @@ The first `prices`/`report` run makes about 1–2k requests at 2.5 req/s (10–1
 ## Notes
 
 - Keep rules: every prime part is surplus. For mods and arcanes, one max-rank copy is kept (equipped copies count toward it).
+- `scope.never_sell = ["overextended", ...]` keeps every copy of those items (slugs or display names, any case). Use it for mods you run at several ranks.
 - `--yes` refuses if the draft is older than `sync.draft_max_age_minutes` (60), was made for another account, `--limit` or `--strategy`, or your WFM listings changed since. Run the dry run again in that case.
 - If an apply stops on an error, the unapplied changes stay as the draft. Fix the cause and run `--yes` again to resume.
 - Listing sync only touches orders the tool created (`data/sync-state.json`) unless `sync.manage_only_tool_orders = false`.

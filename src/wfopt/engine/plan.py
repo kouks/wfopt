@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from wfopt.config import Config
 from wfopt.engine.arcanes import decide_arcane
 from wfopt.engine.classify import ARCANE, MOD, PRIME, Classified
-from wfopt.engine.keep import KeepResult, arcane_units, compute_keep
+from wfopt.engine.keep import KeepResult, arcane_units, compute_keep, keep_all
 from wfopt.engine.model import DUCATS, HOLD, TRADE_ACTIONS, Row
 from wfopt.engine.mods import decide_mod
 from wfopt.engine.pricing import PriceQuote
@@ -18,8 +18,31 @@ from wfopt.market.catalog import Catalog, CatalogItem
 from wfopt.market.prices import PriceNeed
 
 
+def _norm(s: str) -> str:
+    return "".join(ch for ch in s.lower() if ch.isalnum())
+
+
+def never_sell_matcher(cfg: Config) -> set[str]:
+    return {_norm(x) for x in cfg.scope.never_sell if x.strip()}
+
+
+def is_never_sell(item: CatalogItem, names: set[str]) -> bool:
+    """Match on slug or display name, ignoring case, spaces, dashes and underscores."""
+    return bool(names) and (_norm(item.slug) in names or _norm(item.name) in names)
+
+
+def unknown_never_sell(cfg: Config, catalog: Catalog) -> list[str]:
+    """never_sell entries that match no catalogue item (typos)."""
+    known = {_norm(i.slug) for i in catalog.items} | {_norm(i.name) for i in catalog.items}
+    return [x for x in cfg.scope.never_sell if x.strip() and _norm(x) not in known]
+
+
 def compute_keeps(classified: Classified, cfg: Config) -> list[KeepResult]:
-    return [compute_keep(ci, cfg.scope.arcane_ranked_copies_fusable) for ci in classified.items.values()]
+    names = never_sell_matcher(cfg)
+    return [
+        keep_all(ci) if is_never_sell(ci.item, names) else compute_keep(ci, cfg.scope.arcane_ranked_copies_fusable)
+        for ci in classified.items.values()
+    ]
 
 
 @dataclass

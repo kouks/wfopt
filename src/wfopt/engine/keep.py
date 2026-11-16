@@ -43,6 +43,7 @@ class KeepResult:
     kept: Counter[int | None] = field(default_factory=Counter)  # rank -> copies kept / reserved
     status: str = ""  # human-readable keeper status
     keeper_short: tuple[int, int] | None = None  # (units, needed) for arcanes short of a keeper
+    never_sell: bool = False
 
     @property
     def surplus_units(self) -> int:
@@ -143,6 +144,14 @@ def equipped_warning(keep: KeepResult) -> str:
     if len(eq) > 1 or any(h.rank != kept_rank for h in eq):
         return f"{len(eq)} cop{'ies are' if len(eq) > 1 else 'y is'} equipped somewhere: unequip before trading"
     return ""
+
+
+def keep_all(ci: ClassifiedItem) -> KeepResult:
+    """Every copy stays (item is on scope.never_sell)."""
+    kept: Counter[int | None] = Counter()
+    for h in ci.holdings:
+        kept[h.rank] += h.count
+    return KeepResult(ci, Counter(), kept, status="on your never_sell list: keeping every copy", never_sell=True)
 
 
 def compute_keep(ci: ClassifiedItem, ranked_fusable: bool = True) -> KeepResult:

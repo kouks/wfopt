@@ -266,3 +266,24 @@ def test_sell_to_top_buyer_needs_enough_quantity():
     k = keep_mod(ci(m, MOD, {5: 4}))
     rows = decide_mod(k, mkt({(m, 5): q("m", 5, 50, ask=52, bid=55, bid_user="Buyer", bid_qty=1)}))
     assert rows[0].action == LIST and "only wants 1" in rows[0].note
+
+
+def test_never_sell_keeps_every_copy(catalog):
+    from wfopt.engine.classify import classify_holdings
+    from wfopt.engine.plan import build_rows, compute_keeps, price_needs, unknown_never_sell
+    from wfopt.inventory.normalize import normalize
+    from conftest import synthetic_inventory
+
+    cfg = Config()
+    cfg.scope.never_sell = ["Primed Continuity", "arcane_energize", "vasto prime barrel", "typo mod"]
+    c = classify_holdings(normalize(synthetic_inventory()), catalog)
+    keeps = {k.item.item.slug: k for k in compute_keeps(c, cfg)}
+    for slug in ("primed_continuity", "arcane_energize", "vasto_prime_barrel"):
+        assert keeps[slug].never_sell and not keeps[slug].surplus
+    assert keeps["primed_continuity"].kept == Counter({10: 1, 0: 1})  # both ranks kept
+    assert keeps["vitality"].surplus  # not listed -> normal rules
+    needs = {n.item.slug for n in price_needs(list(keeps.values()), catalog)}
+    assert not needs & {"primed_continuity", "arcane_energize", "vasto_prime_barrel"}
+    rows = build_rows(list(keeps.values()), catalog, {}, cfg)
+    assert not any(r.slug in ("primed_continuity", "arcane_energize", "vasto_prime_barrel") for r in rows)
+    assert unknown_never_sell(cfg, catalog) == ["typo mod"]

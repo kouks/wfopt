@@ -105,9 +105,11 @@ class Report:
     def kept_rows(self) -> list[dict[str, Any]]:
         out = []
         for k in self.keeps:
-            if k.item.category not in ("arcane", "mod"):
+            if k.item.category not in ("arcane", "mod") and not k.never_sell:
                 continue
-            ranks = ", ".join(f"{n}× r{r}" for r, n in sorted(k.kept.items(), key=lambda x: -(x[0] or 0)) if n)
+            ranks = ", ".join(
+                f"{n}×" + ("" if r is None else f" r{r}") for r, n in sorted(k.kept.items(), key=lambda x: -(x[0] or 0)) if n
+            )
             out.append(
                 {
                     "name": k.item.item.name,

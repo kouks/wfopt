@@ -1,0 +1,11 @@
+.env
+config.toml
+cache/
+data/
+out/
+tests/fixtures/private/
+lastData*.dat
+.venv/
+__pycache__/
+*.egg-info/
+.pytest_cache/

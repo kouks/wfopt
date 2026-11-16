@@ -1,0 +1,41 @@
+[inventory]
+path = ""                 # empty = %LOCALAPPDATA%\AlecaFrame\lastData.dat
+max_age_hours = 2
+
+[wfm]
+platform = "pc"
+crossplay = true
+language = "en"
+ingame_name = ""          # for reading your public listings without logging in
+user_agent = "wf-trade-optimizer/0.1 (local personal trade report tool)"
+rps = 2.5
+
+[cache_ttl_minutes]
+catalog = 10080           # also invalidated by /v2/versions
+sets = 10080
+statistics = 360
+top_orders = 10
+
+[pricing]
+strategy = "balanced"     # quick | balanced | patient
+undercut = 0
+outlier_floor = 0.6
+orderbook_min_plat = 8    # only fetch live /top orders for items whose stats-based value reaches this
+
+[valuation]
+trade_cost_plat = 5
+daily_trades = 0          # 0 = use your Mastery Rank from the inventory file
+ducat_value_plat = 0.08
+endo_value_per_1000 = 2.5
+bulk_units_per_trade = 3
+horizon_days = 7
+share = 0.2
+liquidity_ref = 5
+
+[scope]
+categories = ["prime", "arcane", "mod"]
+arcane_ranked_copies_fusable = true
+
+[sync]                    # stretch goal
+post_visible = true
+manage_only_tool_orders = true

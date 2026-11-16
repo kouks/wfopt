@@ -145,5 +145,49 @@ def catalog(refresh: bool = typer.Option(False, "--refresh", help="Ignore caches
     console.print(f"[dim]{calls} network calls[/dim]")
 
 
+def _fetch_prices(cfg: Config, client, catalog, classified, refresh: bool = False):
+    from rich.progress import BarColumn, MofNCompleteColumn, Progress, TextColumn, TimeRemainingColumn
+
+    from wfopt.engine.plan import compute_keeps, price_needs
+    from wfopt.market.prices import TopOrdersSource, V1StatsSource, fetch_quotes
+
+    keeps = compute_keeps(classified, cfg)
+    needs = price_needs(keeps, catalog)
+    n_items = len({n.item.id for n in needs})
+    ttl = cfg.cache_ttl_minutes
+    cols = (TextColumn("{task.description}"), BarColumn(), MofNCompleteColumn(), TimeRemainingColumn())
+    with Progress(*cols, console=console, transient=True) as prog:
+        t_stats = prog.add_task("Statistics", total=n_items)
+        t_book = prog.add_task("Order books", total=len(needs))
+        quotes = fetch_quotes(
+            cfg,
+            needs,
+            V1StatsSource(client, ttl.statistics),
+            TopOrdersSource(client, ttl.top_orders),
+            refresh=refresh,
+            progress=lambda kind: prog.advance(t_stats if kind == "stats" else t_book),
+        )
+    return keeps, needs, quotes
+
+
+@app.command()
+def prices(refresh: bool = typer.Option(False, "--refresh", help="Ignore caches")) -> None:
+    """Fetch prices for every surplus in-scope item (rate limited, cached)."""
+    cfg = _cfg()
+    _, holdings = _load_holdings(cfg)
+    with _client(cfg) as client:
+        catalog, classified = _catalog_and_classify(cfg, client, holdings)
+        _, needs, quotes = _fetch_prices(cfg, client, catalog, classified, refresh)
+        calls = client.network_calls
+    with_book = sum(q.orderbook_ok for q in quotes.values())
+    no_stats = sum(not q.stats_ok for q in quotes.values())
+    no_market = sum(not q.has_market for q in quotes.values())
+    console.print(
+        f"Priced {len(quotes)} (item, rank) pairs across {len({n.item.id for n in needs})} items: "
+        f"{with_book} with live order book, {no_stats} without statistics, {no_market} with no market."
+    )
+    console.print(f"[dim]{calls} network calls[/dim]")
+
+
 if __name__ == "__main__":
     app()

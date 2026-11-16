@@ -14,7 +14,7 @@ from wfopt.market.client import WfmClient, v2_data
 ITEM_URL = "https://warframe.market/items/{slug}"
 
 
-@dataclass
+@dataclass(frozen=True)
 class CatalogItem:
     id: str
     slug: str

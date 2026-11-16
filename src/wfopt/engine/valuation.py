@@ -55,9 +55,10 @@ class Market:
         return math.ceil(qty / self.bulk(item, rank)) if qty > 0 else 0
 
 
-def whisper(name: str, item_name: str, rank: int | None, plat: int) -> str:
+def whisper(name: str, item_name: str, rank: int | None, plat: int, per_trade: int = 1) -> str:
     r = f" (rank {rank})" if rank is not None else ""
-    return f'/w {name} Hi! I want to sell: "{item_name}"{r} for {plat} platinum. (warframe.market)'
+    n = f" x{per_trade}" if per_trade > 1 else ""
+    return f'/w {name} Hi! I want to sell: "{item_name}"{r}{n} for {plat} platinum. (warframe.market)'
 
 
 def base_row(item: CatalogItem, category: str, action: str, qty: int, rank: int | None, mkt: Market) -> Row:
@@ -96,14 +97,20 @@ def sale_row(
     price = mkt.price(item, rank) or 0
     r = base_row(item, category, action, qty, rank, mkt)
     r.price = price
-    if action == LIST and r.bid is not None and r.bid >= price and r.bid_user:
-        r.action = SELL_TOP
-        r.price = r.bid
-        r.notes.insert(0, f"top buyer {r.bid_user} already pays {r.bid}p, at or above the list price")
+    q = mkt.quote(item, rank)
     r.trades = mkt.trades_for(item, qty, rank)
+    if q is not None and q.bid is not None and q.bid_user and q.bid_platinum is not None:
+        per = q.bid_per_trade
+        bundle = f" for {per} at a time" if per > 1 else ""
+        if action == LIST and q.bid >= price and qty <= q.bid_qty and qty % per == 0:
+            r.action = SELL_TOP
+            r.price = q.bid
+            r.trades = qty // per
+            r.notes.insert(0, f"top buyer {q.bid_user} already pays {q.bid_platinum}p{bundle} ({q.bid:g}p each), at or above the list price")
+        elif action == LIST and q.bid >= price:
+            r.notes.insert(0, f"top buyer {q.bid_user} pays {q.bid_platinum}p{bundle} but only wants {q.bid_qty}")
+        r.whisper = whisper(q.bid_user, item.name, rank if item.max_rank is not None else None, q.bid_platinum, per)
     r.net = qty * r.price - r.trades * mkt.tc - extra_cost
-    if r.bid is not None and r.bid_user:
-        r.whisper = whisper(r.bid_user, item.name, rank if item.max_rank is not None else None, r.bid)
     if note:
         r.notes.insert(0, note)
     return r

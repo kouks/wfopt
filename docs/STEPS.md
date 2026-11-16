@@ -18,3 +18,10 @@ The plan in [PLAN.md](PLAN.md), split into steps that each end in a commit.
 - 25 ordinary mods (Vitality, Streamline, Hellfire…) have `subtypes: ["regular", "atragraph"]`. Excluding everything with `subtypes` would drop them, so mods whose subtypes include `regular` stay in scope and are priced with `subtype=regular`. Other subtyped items are still excluded.
 - The inventory exposes `PlayerLevel` (Mastery Rank) and `TradesRemaining`. `daily_trades = 0` in config means "use MR from the inventory"; the daily plan also shows trades remaining today.
 - Pricing is two-phase to keep the first run short: v1 statistics for every surplus item, then `/top` order books only for items whose estimated value reaches `pricing.orderbook_min_plat`.
+- **Bundle orders:** rank-0 arcane orders can have `perTrade > 1` (e.g. 62p for 6 copies). `platinum` is the bundle price, so ask/bid are normalised to plat per unit. "Sell to top buyer" is only chosen when that buyer's quantity covers the whole row, and the whisper names the bundle size.
+- **Energize acceptance check (PLAN §10, M3):** with the plan's own formula and default config, the Nov-15 numbers (r0 7p, r5 130p) pick **fuse** (130 − 5 = 125p) over selling 21 rank-0 copies (21 × (7 − 5/3) = 112p). The plan's "21 × 7 = 147 > 130" left out trade costs. The engine follows the formula; `tests/test_engine.py` checks both regimes.
+- Statistics 404s are cached like normal responses, so reruns stay offline.
+
+## Status
+
+All steps are implemented and committed. First real run (2026-11-16): 1121 items / 1841 (item, rank) pairs priced in 2650 calls (~18 min at 2.5 rps). Later runs inside the TTLs make 0 calls.

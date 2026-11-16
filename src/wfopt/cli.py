@@ -189,5 +189,162 @@ def prices(refresh: bool = typer.Option(False, "--refresh", help="Ignore caches"
     console.print(f"[dim]{calls} network calls[/dim]")
 
 
+def _run_report(cfg: Config, strategy: Optional[str], refresh: bool):
+    from rich.progress import BarColumn, MofNCompleteColumn, Progress, TextColumn, TimeRemainingColumn
+
+    from wfopt.pipeline import run
+
+    inv, _ = _load_holdings(cfg)
+    cols = (TextColumn("{task.description}"), BarColumn(), MofNCompleteColumn(), TimeRemainingColumn())
+    with _client(cfg) as client, Progress(*cols, console=console, transient=True) as prog:
+        tasks: dict[str, int] = {}
+
+        def progress(kind: str, done: int, total: int) -> None:
+            if kind not in tasks:
+                tasks[kind] = prog.add_task({"sets": "Set compositions", "prices": "Prices"}.get(kind, kind), total=total)
+            prog.update(tasks[kind], completed=done, total=total)
+
+        return run(cfg, client, inv, strategy=strategy, refresh=refresh, progress=progress)
+
+
+def _print_report(report, top: int = 20) -> None:
+    from wfopt.engine.model import TRADE_ACTIONS
+
+    t = Table(title=f"Top {top} recommendations ({report.strategy})", show_lines=False)
+    for h, j in [("#", "right"), ("Item", "left"), ("Action", "left"), ("Qty", "right"), ("Rank", "right"),
+                 ("Price", "right"), ("Bid", "right"), ("7d med", "right"), ("Vol/d", "right"), ("Net", "right"),
+                 ("p/trade", "right"), ("Note", "left")]:
+        t.add_column(h, justify=j, overflow="fold", max_width=60 if h == "Note" else None)
+    shown = [r for r in report.rows if r.action in TRADE_ACTIONS][:top]
+    for i, r in enumerate(shown, 1):
+        t.add_row(
+            str(i), r.name, r.action, str(r.qty), "" if r.rank is None else str(r.rank), "" if r.price is None else f"{r.price:g}",
+            "" if r.bid is None else f"{r.bid:g}", "" if r.med7 is None else f"{r.med7:.0f}", f"{r.vol7:.1f}",
+            f"{r.net:.0f}", f"{r.net_per_trade:.0f}", r.note,
+        )
+    console.print(t)
+
+    p = report.plan
+    pt = Table(title=f"Today's plan: {p.trades}/{p.budget} trades, ≈{p.plat:.0f}p (net {p.net:.0f}p)")
+    for h in ("Item", "Action", "Qty", "Rank", "Price", "Trades", "Listing"):
+        pt.add_column(h)
+    for e in p.entries:
+        r = e.row
+        pt.add_row(r.name, r.action, str(e.qty), "" if r.rank is None else str(r.rank), "" if r.price is None else f"{r.price:g}", str(e.trades), r.current_listing)
+    console.print(pt)
+    if report.trades_remaining is not None and report.trades_remaining < p.budget:
+        console.print(f"[yellow]Only {report.trades_remaining} trades left today according to the inventory file.[/yellow]")
+    s = report.summary()
+    console.print(" · ".join(f"{k}: [bold]{v}[/bold]" for k, v in s.items()))
+
+
+@app.command()
+def report(
+    strategy: Optional[str] = typer.Option(None, "--strategy", help="quick | balanced | patient"),
+    refresh: bool = typer.Option(False, "--refresh", help="Ignore caches"),
+    open_: bool = typer.Option(False, "--open", help="Open the HTML report in the browser"),
+    top: int = typer.Option(20, "--top", help="Rows to print in the terminal"),
+) -> None:
+    """Run everything and write out/report-YYYYMMDD-HHMM.{csv,html}."""
+    from datetime import datetime
+
+    from wfopt.report.csv_out import write_csv
+    from wfopt.report.html_out import write_html
+
+    cfg = _cfg()
+    if strategy and strategy not in ("quick", "balanced", "patient"):
+        raise typer.BadParameter("strategy must be quick, balanced or patient")
+    rep = _run_report(cfg, strategy, refresh)
+    stamp = datetime.now().strftime("%Y%m%d-%H%M")
+    csv_path = write_csv(rep, cfg.out_dir / f"report-{stamp}.csv")
+    html_path = write_html(rep, cfg.out_dir / f"report-{stamp}.html")
+    _print_report(rep, top)
+    console.print(f"Wrote [bold]{csv_path}[/bold] and [bold]{html_path}[/bold] ({rep.network_calls} network calls)")
+    if open_:
+        import webbrowser
+
+        webbrowser.open(html_path.resolve().as_uri())
+
+
+listings_app = typer.Typer(no_args_is_help=True, help="Sync your WFM sell listings to the recommendations")
+app.add_typer(listings_app, name="listings")
+
+
+def _listing_ops(cfg: Config, jwt: Optional[str], strategy: Optional[str]):
+    from wfopt.pipeline import run
+    from wfopt.sync.auth import AuthError, authenticate
+    from wfopt.sync.listings import SyncState, desired_from_rows, diff, fetch_my_orders, state_path
+
+    inv, _ = _load_holdings(cfg)
+    client = _client(cfg)
+    try:
+        me = authenticate(cfg, client, jwt)
+    except AuthError as e:
+        client.close()
+        console.print(f"[red]{e}[/red]")
+        raise typer.Exit(1)
+    console.print(f"Signed in as [bold]{me.ingame_name}[/bold] (token from {me.source})")
+    with console.status("Building recommendations…"):
+        rep = run(cfg, client, inv, strategy=strategy)
+    subtypes = {iid: ci.subtype for iid, ci in rep.classified.items.items()}
+    desired = desired_from_rows(rep.rows, subtypes)
+    orders = fetch_my_orders(client)
+    state = SyncState.load(state_path(cfg))
+    names = {iid: ci.item.name for iid, ci in rep.classified.items.items()}
+    ops = diff(desired, orders, state, cfg.sync.manage_only_tool_orders, names)
+    return client, ops, state
+
+
+def _print_ops(ops) -> None:
+    from collections import Counter
+
+    t = Table(title="Listing changes")
+    t.add_column("Op")
+    t.add_column("Change")
+    style = {"create": "green", "update": "yellow", "delete": "red", "skip": "dim"}
+    for op in ops:
+        t.add_row(f"[{style[op.kind]}]{op.kind}[/]", op.describe())
+    console.print(t)
+    c = Counter(op.kind for op in ops)
+    console.print(", ".join(f"{k}: {c.get(k, 0)}" for k in ("create", "update", "delete", "skip")))
+
+
+@listings_app.command("diff")
+def listings_diff(
+    jwt: Optional[str] = typer.Option(None, "--jwt", help="JWT cookie value (fallback if sign-in fails)"),
+    strategy: Optional[str] = typer.Option(None, "--strategy"),
+) -> None:
+    """Compare /v2/orders/my with the recommendations: creates, updates and deletes."""
+    client, ops, _ = _listing_ops(_cfg(), jwt, strategy)
+    client.close()
+    _print_ops(ops)
+
+
+@listings_app.command("apply")
+def listings_apply(
+    yes: bool = typer.Option(False, "--yes", help="Actually write. Without it this is a dry run."),
+    jwt: Optional[str] = typer.Option(None, "--jwt"),
+    strategy: Optional[str] = typer.Option(None, "--strategy"),
+) -> None:
+    """Dry run by default. With --yes, apply changes and log them to out/sync-log.jsonl."""
+    from wfopt.sync.listings import SKIP, apply_ops
+
+    cfg = _cfg()
+    client, ops, state = _listing_ops(cfg, jwt, strategy)
+    try:
+        _print_ops(ops)
+        writes = [op for op in ops if op.kind != SKIP]
+        if not writes:
+            console.print("Nothing to change.")
+            return
+        if not yes:
+            console.print(f"[bold]Dry run.[/bold] Re-run with --yes to apply {len(writes)} change(s).")
+            return
+        n = apply_ops(cfg, client, ops, state, cfg.out_dir / "sync-log.jsonl", echo=console.print)
+        console.print(f"Applied {n}/{len(writes)} change(s). Log: {cfg.out_dir / 'sync-log.jsonl'}")
+    finally:
+        client.close()
+
+
 if __name__ == "__main__":
     app()

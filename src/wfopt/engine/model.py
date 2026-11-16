@@ -23,9 +23,9 @@ class Row:
     action: str
     qty: int
     rank: int | None = None
-    price: int | None = None  # suggested unit price (or bid for Sell to top buyer)
-    ask: int | None = None
-    bid: int | None = None
+    price: float | None = None  # suggested unit price (or the bid's unit price for Sell to top buyer)
+    ask: float | None = None
+    bid: float | None = None
     bid_user: str | None = None
     med7: float | None = None
     vol7: float = 0.0

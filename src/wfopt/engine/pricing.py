@@ -48,8 +48,13 @@ class Order:
             d.get("rank"),
             u.get("status", ""),
             u.get("ingameName", ""),
-            int(d.get("perTrade") or 1),
+            max(1, int(d.get("perTrade") or 1)),
         )
+
+    @property
+    def unit(self) -> float:
+        """Plat per single unit. `platinum` is the price of a `perTrade` bundle."""
+        return self.platinum / self.per_trade
 
 
 @dataclass
@@ -58,10 +63,13 @@ class PriceQuote:
     rank: int | None
     med7: float | None = None
     vol7: float = 0.0
-    ask: int | None = None
+    ask: float | None = None  # per unit
     ask_user: str | None = None
-    bid: int | None = None
+    bid: float | None = None  # per unit
     bid_user: str | None = None
+    bid_qty: int = 0  # units the top buyer still wants (WFM quantity, read as units)
+    bid_per_trade: int = 1
+    bid_platinum: int | None = None  # the buyer's price for one perTrade bundle
     stats_ok: bool = False
     orderbook_ok: bool = False
     flags: list[str] = field(default_factory=list)
@@ -118,19 +126,19 @@ def best_ask(sells: list[Order], med7: float | None, floor: float, exclude_user:
         if o.status in STATUS_RANK
         and o.ingame_name.lower() != ex
         and o.platinum > 0
-        and (med7 is None or o.platinum >= floor * med7)
+        and (med7 is None or o.unit >= floor * med7)
     ]
     for status in ("ingame", "online"):
         group = [o for o in cands if o.status == status]
         if group:
-            return min(group, key=lambda o: o.platinum)
+            return min(group, key=lambda o: o.unit)
     return None
 
 
 def best_bid(buys: list[Order], exclude_user: str = "") -> Order | None:
     ex = exclude_user.lower()
     cands = [o for o in buys if o.status in STATUS_RANK and o.ingame_name.lower() != ex and o.platinum > 0]
-    return max(cands, key=lambda o: (o.platinum, -STATUS_RANK[o.status])) if cands else None
+    return max(cands, key=lambda o: (o.unit, -STATUS_RANK[o.status])) if cands else None
 
 
 def build_quote(
@@ -159,9 +167,10 @@ def build_quote(
         b = best_bid(buys, own_name)
         q.orderbook_ok = True
         if a:
-            q.ask, q.ask_user = a.platinum, a.ingame_name
+            q.ask, q.ask_user = round(a.unit, 2), a.ingame_name
         if b:
-            q.bid, q.bid_user = b.platinum, b.ingame_name
+            q.bid, q.bid_user = round(b.unit, 2), b.ingame_name
+            q.bid_qty, q.bid_per_trade, q.bid_platinum = b.quantity, b.per_trade, b.platinum
     return q
 
 
@@ -172,13 +181,14 @@ def suggested_price(q: PriceQuote, cfg: PricingCfg, strategy: str | None = None)
     if med is None and ask is None and bid is None:
         return None
     if med is None:
-        return ask if ask is not None else bid
+        return max(1, math.floor(ask if ask is not None else bid))
     if ask is None:
-        return max(math.ceil(med), bid or 0)
+        return max(math.ceil(med), math.floor(bid or 0))
+    ask_i, bid_i = math.ceil(ask), math.floor(bid or 0)
     if strategy == "quick":
-        p = max(bid or 0, min(ask - 1, round(med)))
+        p = max(bid_i, min(ask_i - 1, round(med)))
     elif strategy == "patient":
-        p = max(math.ceil(med), ask)
+        p = max(math.ceil(med), ask_i)
     else:
-        p = max(ask - cfg.undercut, max(bid or 0, math.ceil(0.85 * med)))
+        p = max(ask_i - cfg.undercut, max(bid_i, math.ceil(0.85 * med)))
     return max(1, int(p))

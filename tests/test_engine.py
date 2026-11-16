@@ -25,8 +25,11 @@ def ci(it, cat, copies: dict, equipped_rank=None):
     return ClassifiedItem(it, cat, hs)
 
 
-def q(slug, rank, med, vol=50.0, ask=None, bid=None, bid_user=None):
-    return PriceQuote(slug, rank, med7=med, vol7=vol, ask=ask, bid=bid, bid_user=bid_user, stats_ok=med is not None)
+def q(slug, rank, med, vol=50.0, ask=None, bid=None, bid_user=None, bid_qty=1, per_trade=1):
+    return PriceQuote(
+        slug, rank, med7=med, vol7=vol, ask=ask, bid=bid, bid_user=bid_user, stats_ok=med is not None,
+        bid_qty=bid_qty, bid_per_trade=per_trade, bid_platinum=None if bid is None else round(bid * per_trade),
+    )
 
 
 def mkt(quotes, cfg=None):
@@ -216,7 +219,7 @@ def test_mod_partial_rank_maxed():
 def test_sell_to_top_buyer_when_bid_meets_price():
     m = item("mod", ["mod", "rare"], 5)
     k = keep_mod(ci(m, MOD, {5: 2}))
-    rows = decide_mod(k, mkt({(m, 5): q("m", 5, 50, ask=52, bid=55, bid_user="Buyer")}))
+    rows = decide_mod(k, mkt({(m, 5): q("m", 5, 50, ask=52, bid=55, bid_user="Buyer", bid_qty=5)}))
     assert rows[0].action == SELL_TOP and rows[0].price == 55
     assert rows[0].whisper == '/w Buyer Hi! I want to sell: "Mod" (rank 5) for 55 platinum. (warframe.market)'
 
@@ -245,3 +248,21 @@ def test_daily_plan_respects_budget():
     assert plan.trades == 4
     assert plan.entries[0].row.slug == "a" and plan.entries[0].qty == 3
     assert plan.entries[1].qty == 1
+
+
+def test_bundle_bid_is_priced_per_unit():
+    """Regression: a buy order of 62p with perTrade 6 is ~10.3p per copy, not 62p."""
+    from wfopt.engine.pricing import Order, build_quote
+    from wfopt.config import PricingCfg
+
+    buys = [Order("buy", 62, 666, 0, "ingame", "bulk", per_trade=6), Order("buy", 10, 99, 0, "ingame", "single")]
+    sells = [Order("sell", 11, 2, 0, "ingame", "s")]
+    qq = build_quote("x", 0, stat_rows=None, orders=(sells, buys), cfg=PricingCfg())
+    assert qq.bid == pytest.approx(10.33, abs=0.01) and qq.bid_per_trade == 6 and qq.bid_platinum == 62
+
+
+def test_sell_to_top_buyer_needs_enough_quantity():
+    m = item("mod", ["mod", "rare"], 5)
+    k = keep_mod(ci(m, MOD, {5: 4}))
+    rows = decide_mod(k, mkt({(m, 5): q("m", 5, 50, ask=52, bid=55, bid_user="Buyer", bid_qty=1)}))
+    assert rows[0].action == LIST and "only wants 1" in rows[0].note

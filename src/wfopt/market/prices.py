@@ -45,7 +45,11 @@ class V1StatsSource:
         if item.slug in self._mem and not refresh:
             return self._mem[item.slug]
         try:
-            body = self.client.get_json(f"/v1/items/{item.slug}/statistics", ttl_minutes=self.ttl, refresh=refresh)
+            body = self.client.get_json(
+                f"/v1/items/{item.slug}/statistics", ttl_minutes=self.ttl, refresh=refresh, allow_404=True
+            )
+            if body is None:  # 404 (cached too, so reruns stay offline)
+                raise WfmError("no statistics", 404)
             closed = (body or {}).get("payload", {}).get("statistics_closed") or {}
             res = (
                 [StatRow.from_api(r) for r in closed.get("90days", [])],

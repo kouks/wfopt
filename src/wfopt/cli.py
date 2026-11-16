@@ -270,12 +270,12 @@ listings_app = typer.Typer(no_args_is_help=True, help="Sync your WFM sell listin
 app.add_typer(listings_app, name="listings")
 
 
-def _listing_ops(cfg: Config, jwt: Optional[str], strategy: Optional[str], limit: int):
-    from wfopt.pipeline import run
-    from wfopt.sync.auth import AuthError, authenticate
-    from wfopt.sync.listings import SyncState, desired_from_rows, diff, fetch_my_orders, is_managed, state_path
+LIMIT_HELP = "Max open orders after syncing (WFM allows 100, the default). Top recommendations by priority win."
 
-    inv, _ = _load_holdings(cfg)
+
+def _auth(cfg: Config, jwt: Optional[str]):
+    from wfopt.sync.auth import AuthError, authenticate
+
     client = _client(cfg)
     try:
         me = authenticate(cfg, client, jwt)
@@ -284,6 +284,16 @@ def _listing_ops(cfg: Config, jwt: Optional[str], strategy: Optional[str], limit
         console.print(f"[red]{e}[/red]")
         raise typer.Exit(1)
     console.print(f"Signed in as [bold]{me.ingame_name}[/bold] (token from {me.source})")
+    return client, me
+
+
+def _draft_ops(cfg: Config, client, me, strategy: Optional[str], limit: Optional[int]):
+    """Build fresh recommendations and the listing ops, and save them as the draft for --yes."""
+    from wfopt.pipeline import run
+    from wfopt.sync.listings import SyncState, desired_from_rows, diff, fetch_my_orders, is_managed, save_draft, state_path
+
+    limit = limit or 100
+    inv, _ = _load_holdings(cfg)
     with console.status("Building recommendations…"):
         rep = run(cfg, client, inv, strategy=strategy)
     subtypes = {iid: ci.subtype for iid, ci in rep.classified.items.items()}
@@ -293,8 +303,12 @@ def _listing_ops(cfg: Config, jwt: Optional[str], strategy: Optional[str], limit
     names = {iid: ci.item.name for iid, ci in rep.classified.items.items()}
     ops = diff(desired, orders, state, cfg.sync.manage_only_tool_orders, names, limit)
     fixed = sum(1 for o in orders if not is_managed(o, state, cfg.sync.manage_only_tool_orders))
-    console.print(f"Listing the top {limit} recommendations ({len(desired)} wanted; {fixed} of your orders aren't managed by the tool and use slots too).")
-    return client, ops, state
+    console.print(
+        f"Listing the top {limit} recommendations ({len(desired)} wanted; "
+        f"{fixed} of your orders aren't managed by the tool and use slots too)."
+    )
+    save_draft(cfg, ops, orders, me.id or me.ingame_name, limit, rep.strategy)
+    return ops
 
 
 def _print_ops(ops) -> None:
@@ -311,40 +325,74 @@ def _print_ops(ops) -> None:
     console.print(", ".join(f"{k}: {c.get(k, 0)}" for k in ("create", "update", "delete", "skip")))
 
 
+def _draft_hint(cfg: Config, n: int) -> None:
+    console.print(
+        f"[bold]Dry run.[/bold] Draft saved. Run [bold]wfopt listings apply --yes[/bold] within "
+        f"{cfg.sync.draft_max_age_minutes:g} min to apply these {n} change(s) exactly."
+    )
+
+
 @listings_app.command("diff")
 def listings_diff(
     jwt: Optional[str] = typer.Option(None, "--jwt", help="JWT cookie value (fallback if sign-in fails)"),
     strategy: Optional[str] = typer.Option(None, "--strategy"),
-    limit: int = typer.Option(100, "--limit", min=1, max=100, help="Max open orders after syncing (WFM allows 100). Top recommendations by priority win."),
+    limit: Optional[int] = typer.Option(None, "--limit", min=1, max=100, help=LIMIT_HELP),
 ) -> None:
-    """Compare /v2/orders/my with the recommendations: creates, updates and deletes."""
-    client, ops, _ = _listing_ops(_cfg(), jwt, strategy, limit)
-    client.close()
+    """Compare /v2/orders/my with the recommendations and save the result as the draft."""
+    from wfopt.sync.listings import SKIP
+
+    cfg = _cfg()
+    client, me = _auth(cfg, jwt)
+    try:
+        ops = _draft_ops(cfg, client, me, strategy, limit)
+    finally:
+        client.close()
     _print_ops(ops)
+    writes = sum(op.kind != SKIP for op in ops)
+    if writes:
+        _draft_hint(cfg, writes)
 
 
 @listings_app.command("apply")
 def listings_apply(
-    yes: bool = typer.Option(False, "--yes", help="Actually write. Without it this is a dry run."),
+    yes: bool = typer.Option(False, "--yes", help="Apply the saved dry-run draft. Without it this is a dry run."),
     jwt: Optional[str] = typer.Option(None, "--jwt"),
     strategy: Optional[str] = typer.Option(None, "--strategy"),
-    limit: int = typer.Option(100, "--limit", min=1, max=100, help="Max open orders after syncing (WFM allows 100). Top recommendations by priority win."),
+    limit: Optional[int] = typer.Option(None, "--limit", min=1, max=100, help=LIMIT_HELP),
 ) -> None:
-    """Dry run by default. With --yes, apply changes and log them to out/sync-log.jsonl."""
-    from wfopt.sync.listings import SKIP, apply_ops
+    """Dry run saves a draft; --yes applies that draft as reviewed and logs to out/sync-log.jsonl."""
+    from wfopt.sync.listings import SKIP, SyncState, apply_ops, discard_draft, draft_problem, fetch_my_orders, load_draft, state_path
 
     cfg = _cfg()
-    client, ops, state = _listing_ops(cfg, jwt, strategy, limit)
+    client, me = _auth(cfg, jwt)
     try:
-        _print_ops(ops)
-        writes = [op for op in ops if op.kind != SKIP]
+        if not yes:
+            ops = _draft_ops(cfg, client, me, strategy, limit)
+            _print_ops(ops)
+            writes = sum(op.kind != SKIP for op in ops)
+            if writes:
+                _draft_hint(cfg, writes)
+            else:
+                console.print("Nothing to change.")
+            return
+
+        draft = load_draft(cfg)
+        orders = fetch_my_orders(client)
+        problem = draft_problem(draft, cfg, orders, me.id or me.ingame_name, limit, strategy)
+        if problem:
+            console.print(f"[red]Not applying: {problem}.[/red] Run [bold]wfopt listings apply[/bold] (dry run) again first.")
+            raise typer.Exit(1)
+        assert draft is not None
+        console.print(f"Applying the draft from {draft.age_minutes:.0f} min ago (no prices recomputed).")
+        _print_ops(draft.ops)
+        writes = [op for op in draft.ops if op.kind != SKIP]
         if not writes:
             console.print("Nothing to change.")
+            discard_draft(cfg)
             return
-        if not yes:
-            console.print(f"[bold]Dry run.[/bold] Re-run with --yes to apply {len(writes)} change(s).")
-            return
-        n = apply_ops(cfg, client, ops, state, cfg.out_dir / "sync-log.jsonl", echo=console.print)
+        state = SyncState.load(state_path(cfg))
+        n = apply_ops(cfg, client, draft.ops, state, cfg.out_dir / "sync-log.jsonl", echo=console.print)
+        discard_draft(cfg)  # orders changed now, so the draft is spent either way
         console.print(f"Applied {n}/{len(writes)} change(s). Log: {cfg.out_dir / 'sync-log.jsonl'}")
     finally:
         client.close()

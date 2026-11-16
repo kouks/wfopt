@@ -63,6 +63,7 @@ class ScopeCfg:
 class SyncCfg:
     post_visible: bool = True
     manage_only_tool_orders: bool = True
+    draft_max_age_minutes: float = 60  # `listings apply --yes` applies the dry-run draft if it's this fresh
 
 
 @dataclass

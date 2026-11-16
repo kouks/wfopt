@@ -134,3 +134,57 @@ def test_limit_is_capped_at_100():
     rows = [row(f"i{n}", LIST, 1, 10, priority=float(n)) for n in range(150)]
     ops = diff(desired_from_rows(rows), [], SyncState(), limit=500)
     assert sum(o.kind == CREATE for o in ops) == 100
+
+
+# ---------------------------------------------------------------- drafts
+
+
+def _orders():
+    return [{"id": "o1", "type": "sell", "itemId": "a", "platinum": 10, "quantity": 1}]
+
+
+def test_draft_roundtrip_and_problems(cfg):
+    from wfopt.sync.listings import Op, draft_problem, load_draft, save_draft
+
+    ops = [Op(CREATE, "b", "B", None, price=20, qty=1)]
+    save_draft(cfg, ops, _orders(), "u1", 100, "balanced")
+    d = load_draft(cfg)
+    assert d.ops == ops and d.limit == 100
+    assert draft_problem(d, cfg, _orders(), "u1") is None
+    assert draft_problem(d, cfg, _orders(), "u1", limit=100, strategy="balanced") is None
+    assert "different account" in draft_problem(d, cfg, _orders(), "u2")
+    assert "--limit 100" in draft_problem(d, cfg, _orders(), "u1", limit=50)
+    assert "--strategy balanced" in draft_problem(d, cfg, _orders(), "u1", strategy="quick")
+    changed = _orders()
+    changed[0]["platinum"] = 11
+    assert "changed since the draft" in draft_problem(d, cfg, changed, "u1")
+    assert "changed since the draft" in draft_problem(d, cfg, _orders() + [{"id": "o2", "type": "buy"}], "u1")
+    d.created_at -= 61 * 60
+    assert "min old" in draft_problem(d, cfg, _orders(), "u1")
+    assert draft_problem(None, cfg, _orders(), "u1") == "no draft found"
+
+
+@respx.mock
+def test_apply_yes_uses_draft_without_market_calls(tmp_path, monkeypatch):
+    """--yes must not rebuild recommendations: only /v2/me, /v2/orders/my and the writes are allowed."""
+    from typer.testing import CliRunner
+
+    from wfopt.cli import app
+    from wfopt.config import load_config
+    from wfopt.sync.listings import Op, draft_path, save_draft
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("WFM_JWT", "tok")
+    cfg = load_config(root=tmp_path)
+    respx.get(f"{API}/v2/me").mock(return_value=httpx.Response(200, json={"data": {"ingameName": "kouks", "id": "u1"}}))
+    respx.get(f"{API}/v2/orders/my").mock(return_value=httpx.Response(200, json={"data": _orders()}))
+    post = respx.post(f"{API}/v2/order").mock(return_value=httpx.Response(200, json={"data": {"id": "n1"}}))
+    save_draft(cfg, [Op(CREATE, "b", "B", None, price=20, qty=1)], _orders(), "u1", 100, "balanced")
+
+    res = CliRunner().invoke(app, ["listings", "apply", "--yes"])
+    assert res.exit_code == 0, res.output
+    assert post.call_count == 1 and json.loads(post.calls[0].request.content)["platinum"] == 20
+    assert not draft_path(cfg).exists()  # spent
+
+    res = CliRunner().invoke(app, ["listings", "apply", "--yes"])  # no draft left -> refuse, no writes
+    assert res.exit_code == 1 and "no draft found" in res.output and post.call_count == 1

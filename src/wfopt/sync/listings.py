@@ -182,6 +182,83 @@ def diff(
     return deletes + updates + creates + skips
 
 
+# -- drafts: the dry run saves its ops; --yes applies exactly those -------------------------------
+
+
+@dataclass
+class Draft:
+    created_at: float
+    user_id: str
+    limit: int
+    strategy: str
+    orders_fingerprint: list[list[Any]]
+    ops: list[Op]
+
+    @property
+    def age_minutes(self) -> float:
+        return (time.time() - self.created_at) / 60
+
+
+def draft_path(cfg: Config) -> Path:
+    return cfg.data_dir / "sync-draft.json"
+
+
+def orders_fingerprint(orders: list[dict[str, Any]]) -> list[list[Any]]:
+    """What must not change between the dry run and --yes for the draft to stay valid."""
+    return sorted(
+        [str(o.get("id")), o.get("type"), o.get("platinum"), o.get("quantity"), o.get("rank"), o.get("visible", True)]
+        for o in orders
+    )
+
+
+def save_draft(cfg: Config, ops: list[Op], orders: list[dict[str, Any]], user_id: str, limit: int, strategy: str) -> Draft:
+    d = Draft(time.time(), user_id, limit, strategy, orders_fingerprint(orders), ops)
+    p = draft_path(cfg)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps({**asdict(d), "ops": [asdict(o) for o in ops]}, indent=1), encoding="utf-8")
+    return d
+
+
+def load_draft(cfg: Config) -> Draft | None:
+    p = draft_path(cfg)
+    if not p.exists():
+        return None
+    try:
+        d = json.loads(p.read_text(encoding="utf-8"))
+        return Draft(d["created_at"], d["user_id"], d["limit"], d["strategy"], d["orders_fingerprint"], [Op(**o) for o in d["ops"]])
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def discard_draft(cfg: Config) -> None:
+    draft_path(cfg).unlink(missing_ok=True)
+
+
+def draft_problem(
+    draft: Draft | None,
+    cfg: Config,
+    orders: list[dict[str, Any]],
+    user_id: str,
+    limit: int | None = None,
+    strategy: str | None = None,
+) -> str | None:
+    """Why the saved draft can't be applied as-is, or None if it can."""
+    if draft is None:
+        return "no draft found"
+    max_age = cfg.sync.draft_max_age_minutes
+    if draft.age_minutes > max_age:
+        return f"the draft is {draft.age_minutes:.0f} min old (limit {max_age:g} min, sync.draft_max_age_minutes)"
+    if draft.user_id != user_id:
+        return "the draft was made for a different account"
+    if limit is not None and limit != draft.limit:
+        return f"the draft was made with --limit {draft.limit}"
+    if strategy is not None and strategy != draft.strategy:
+        return f"the draft was made with --strategy {draft.strategy}"
+    if orders_fingerprint(orders) != draft.orders_fingerprint:
+        return "your listings on warframe.market changed since the draft"
+    return None
+
+
 def fetch_my_orders(client: WfmClient) -> list[dict[str, Any]]:
     resp = client.request("GET", "/v2/orders/my", auth=True)
     if resp.status_code >= 400:

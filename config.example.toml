@@ -39,3 +39,4 @@ arcane_ranked_copies_fusable = true
 [sync]                    # stretch goal
 post_visible = true
 manage_only_tool_orders = true
+draft_max_age_minutes = 60  # `listings apply --yes` applies the dry-run draft if it is this fresh

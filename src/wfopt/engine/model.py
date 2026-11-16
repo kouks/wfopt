@@ -43,6 +43,7 @@ class Row:
     current_listing: str = ""
     # sync helpers
     max_rank: int | None = None
+    bulk_tradable: bool = False
 
     @property
     def net_per_trade(self) -> float:

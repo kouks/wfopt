@@ -30,6 +30,7 @@ class Desired:
     price: int
     subtype: str | None = None
     priority: float = 0.0
+    per_trade: int | None = None  # WFM requires perTrade for bulk-tradable items and rejects it otherwise
 
 
 @dataclass
@@ -45,6 +46,7 @@ class Op:
     old_qty: int | None = None
     subtype: str | None = None
     reason: str = ""
+    per_trade: int | None = None
 
     def describe(self) -> str:
         r = f" r{self.rank}" if self.rank is not None else ""
@@ -95,7 +97,8 @@ def desired_from_rows(rows: list[Row], subtypes: dict[str, str | None] | None = 
             out[key].price = max(out[key].price, int(r.price))
         else:
             out[key] = Desired(
-                r.item_id, r.slug, r.name, rank, r.qty, int(r.price), (subtypes or {}).get(r.item_id), r.priority
+                r.item_id, r.slug, r.name, rank, r.qty, int(r.price), (subtypes or {}).get(r.item_id), r.priority,
+                1 if r.bulk_tradable else None,
             )
     return out
 
@@ -157,7 +160,9 @@ def diff(
             continue  # an existing tool listing here is deleted below
         slots -= 1
         if not mine:
-            creates.append(Op(CREATE, d.item_id, d.name, d.rank, price=d.price, qty=d.qty, subtype=d.subtype))
+            creates.append(
+                Op(CREATE, d.item_id, d.name, d.rank, price=d.price, qty=d.qty, subtype=d.subtype, per_trade=d.per_trade)
+            )
             continue
         o = mine[0]
         kept.add(o["id"])
@@ -283,10 +288,10 @@ def apply_ops(
         if op.kind == CREATE:
             body: dict[str, Any] = {
                 "itemId": op.item_id, "type": "sell", "platinum": op.price, "quantity": op.qty,
-                # required by v2; 1 = buyers can take single copies at the per-unit price we computed
-                "perTrade": 1,
                 "visible": cfg.sync.post_visible,
             }
+            if op.per_trade:  # bulk-tradable only; 1 = buyers can take single copies at our per-unit price
+                body["perTrade"] = op.per_trade
             if op.rank is not None:
                 body["rank"] = op.rank
             if op.subtype:

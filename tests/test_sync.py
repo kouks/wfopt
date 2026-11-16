@@ -12,8 +12,8 @@ from wfopt.sync.listings import (
 )
 
 
-def row(item_id, action, qty, price, rank=None, max_rank=None, priority=0.0):
-    r = Row(item_id, item_id, item_id.title(), "mod", action, qty, rank, price, max_rank=max_rank)
+def row(item_id, action, qty, price, rank=None, max_rank=None, priority=0.0, bulk=False):
+    r = Row(item_id, item_id, item_id.title(), "mod", action, qty, rank, price, max_rank=max_rank, bulk_tradable=bulk)
     r.priority = priority
     return r
 
@@ -60,7 +60,7 @@ def test_apply_writes_logs_and_stops_on_4xx(cfg):
         side_effect=[httpx.Response(200, json={"data": {"id": "new1"}}), httpx.Response(400, json={"error": "bad rank"})]
     )
     delete = respx.delete(f"{API}/v2/order/o3").mock(return_value=httpx.Response(200, json={"data": None}))
-    desired = desired_from_rows([row("a", LIST, 1, 100, 5, 5), row("b", LIST, 1, 30)])
+    desired = desired_from_rows([row("a", LIST, 1, 100, 5, 5, bulk=True), row("b", LIST, 1, 30)])
     state = SyncState({"o3": {}})
     ops = diff(desired, [{"id": "o3", "type": "sell", "itemId": "z", "platinum": 9, "quantity": 1}], state)
     ops.sort(key=lambda o: o.kind != DELETE)  # delete first, then the two creates
@@ -71,7 +71,9 @@ def test_apply_writes_logs_and_stops_on_4xx(cfg):
     assert n == 2 and delete.called and post.call_count == 2
     sent = json.loads(post.calls[0].request.content)
     assert sent["type"] == "sell" and sent["visible"] is True and sent.get("rank") in (5, None)
-    assert sent["perTrade"] == 1  # v2 rejects creates without it (app.field.required)
+    # WFM v2: perTrade is required for bulk-tradable items (arcane "a") and not allowed otherwise (set "b")
+    bodies = {json.loads(c.request.content)["itemId"]: json.loads(c.request.content) for c in post.calls}
+    assert bodies["a"]["perTrade"] == 1 and "perTrade" not in bodies["b"]
     assert post.calls[0].request.headers["Authorization"] == "Bearer secret-token"
     assert "Stopped" in out[-1] and "bad rank" in out[-1]
     log = (cfg.out_dir / "sync-log.jsonl").read_text()

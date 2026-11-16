@@ -78,6 +78,7 @@ def base_row(item: CatalogItem, category: str, action: str, qty: int, rank: int 
         vol7=q.vol7 if q else 0.0,
         url=item.url,
         max_rank=item.max_rank,
+        bulk_tradable=item.bulk_tradable,
         notes=list(q.flags) if q else [],
     )
 

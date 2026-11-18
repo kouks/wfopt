@@ -80,18 +80,18 @@ def group_primes(keeps: list[KeepResult], catalog: Catalog) -> list[SetGroup]:
 def price_needs(keeps: list[KeepResult], catalog: Catalog) -> list[PriceNeed]:
     needs: dict[tuple[str, int | None], PriceNeed] = {}
 
-    def add(item: CatalogItem, rank: int | None, units: int, subtype: str | None = None) -> None:
+    def add(item: CatalogItem, rank: int | None, units: int, subtype: str | None = None, owned: int = 0) -> None:
         key = (item.id, rank)
         if key in needs:
             old = needs[key]
-            needs[key] = PriceNeed(item, rank, old.units + units, subtype or old.subtype)
+            needs[key] = PriceNeed(item, rank, old.units + units, subtype or old.subtype, max(owned, old.owned))
         else:
-            needs[key] = PriceNeed(item, rank, units, subtype)
+            needs[key] = PriceNeed(item, rank, units, subtype, owned)
 
     for g in group_primes(keeps, catalog):
         for ps in g.parts:
             if ps.surplus:
-                add(ps.item, None, ps.surplus)
+                add(ps.item, None, ps.surplus, owned=ps.surplus)
         if g.root is not None and g.parts and min(ps.surplus // ps.qty_in_set for ps in g.parts) >= 1:
             add(g.root, None, min(ps.surplus // ps.qty_in_set for ps in g.parts))
 
@@ -102,17 +102,16 @@ def price_needs(keeps: list[KeepResult], catalog: Catalog) -> list[PriceNeed]:
         m = it.max_rank or 0
         sub = k.item.subtype
         s = k.surplus
+        owned = k.item.units
         if k.item.category == ARCANE:
             u_s = sum(arcane_units(r) * n for r, n in s.items() if r is not None and r < m)
             if s.get(0):
-                add(it, 0, s[0], sub)
+                add(it, 0, s[0], sub, owned)
             if s.get(m) or u_s >= arcane_units(m):
-                add(it, m, s.get(m, 0) + u_s // arcane_units(m), sub)
+                add(it, m, s.get(m, 0) + u_s // arcane_units(m), sub, owned)
         elif k.item.category == MOD:
-            if s.get(0):
-                add(it, 0, s[0], sub)
-            if m > 0:
-                add(it, m, sum(s.values()), sub)
+            # mods are only ever priced and listed at rank 0 (no Endo spent, rank barely moves the price)
+            add(it, 0, sum(s.values()), sub, owned)
     return list(needs.values())
 
 

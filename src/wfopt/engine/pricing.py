@@ -72,6 +72,7 @@ class PriceQuote:
     bid_platinum: int | None = None  # the buyer's price for one perTrade bundle
     stats_ok: bool = False
     orderbook_ok: bool = False
+    median_suspect: bool = False  # median looks like fake sales; live asks set the price
     flags: list[str] = field(default_factory=list)
 
     @property
@@ -151,6 +152,7 @@ def build_quote(
     own_name: str = "",
     subtype: str | None = None,
     now: datetime | None = None,
+    owned: int = 0,
 ) -> PriceQuote:
     q = PriceQuote(slug, rank)
     if stat_rows is not None:
@@ -171,13 +173,33 @@ def build_quote(
         if b:
             q.bid, q.bid_user = round(b.unit, 2), b.ingame_name
             q.bid_qty, q.bid_per_trade, q.bid_platinum = b.quantity, b.per_trade, b.platinum
+        check_median(q, sells, cfg, owned, own_name)
     return q
+
+
+def check_median(q: PriceQuote, sells: list[Order], cfg: PricingCfg, owned: int, own_name: str = "") -> None:
+    """Fake-sales guard. A common item (many copies owned) whose live sellers sit far below the
+    7-day median was "sold" for show: trust the cheapest live sellers instead of the median.
+
+    Normally asks under `outlier_floor × median` are dropped as trolls; here they are the real market.
+    """
+    if q.med7 is None or owned < cfg.suspect_median_min_copies:
+        return
+    raw = best_ask(sells, None, cfg.outlier_floor, own_name)  # no troll floor
+    if raw is None or raw.unit >= cfg.suspect_median_ratio * q.med7:
+        return
+    q.median_suspect = True
+    q.ask, q.ask_user = round(raw.unit, 2), raw.ingame_name
+    q.flags.append(
+        f"7-day median {q.med7:.0f}p looks like fake sales: you own {owned} copies and live sellers start at "
+        f"{raw.unit:g}p, so the price follows live sellers"
+    )
 
 
 def suggested_price(q: PriceQuote, cfg: PricingCfg, strategy: str | None = None) -> int | None:
     """List price for one unit under the chosen strategy, or None if there is no market."""
     strategy = strategy or cfg.strategy
-    med, ask, bid = q.med7, q.ask, q.bid
+    med, ask, bid = (None if q.median_suspect else q.med7), q.ask, q.bid
     if med is None and ask is None and bid is None:
         return None
     if med is None:

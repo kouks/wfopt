@@ -18,6 +18,7 @@ class PriceNeed:
     rank: int | None
     units: int  # surplus units this quote would price, for deciding whether the order book is worth a call
     subtype: str | None = None
+    owned: int = 0  # copies the player owns, for the fake-median check
 
     @property
     def key(self) -> tuple[str, int | None]:
@@ -117,7 +118,7 @@ def fetch_quotes(
             orders = book.top(n.item, n.rank, n.subtype, refresh=refresh)
             q = build_quote(
                 n.item.slug, n.rank, stat_rows=hist[n.item.id], orders=orders, cfg=cfg.pricing,
-                own_name=own, subtype=n.subtype, now=now,
+                own_name=own, subtype=n.subtype, now=now, owned=n.owned,
             )
             if orders is None:
                 q.flags.append("order book unavailable")

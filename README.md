@@ -41,6 +41,8 @@ The auction search is rate limited much more strictly than the rest of the API (
 ## Notes
 
 - Keep rules: every prime part is surplus. For mods and arcanes, one max-rank copy is kept (equipped copies count toward it).
+- Mods are only ever priced and listed at rank 0. Spare ranked copies are sold as rank-0 listings, and mods are never maxed with Endo.
+- Fake-sales guard: if you own at least `pricing.suspect_median_min_copies` (100) copies of an item and live sellers start below `suspect_median_ratio` (50%) of the 7-day median, the median is treated as fake and the price follows live sellers.
 - `scope.never_sell = ["overextended", ...]` keeps every copy of those items (slugs or display names, any case). Use it for mods you run at several ranks.
 - `--yes` refuses if the draft is older than `sync.draft_max_age_minutes` (60), was made for another account, `--limit` or `--strategy`, or your WFM listings changed since. Run the dry run again in that case.
 - If an apply stops on an error, the unapplied changes stay as the draft. Fix the cause and run `--yes` again to resume.

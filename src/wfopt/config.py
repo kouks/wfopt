@@ -43,6 +43,10 @@ class PricingCfg:
     undercut: int = 0
     outlier_floor: float = 0.6
     orderbook_min_plat: float = 8
+    # Fake-sales guard: with this many copies owned, a 7-day median that live sellers undercut by
+    # more than `suspect_median_ratio` is treated as inflated, and live asks set the price instead.
+    suspect_median_min_copies: int = 100
+    suspect_median_ratio: float = 0.5
 
 
 @dataclass

@@ -25,6 +25,8 @@ strategy = "balanced"     # quick | balanced | patient
 undercut = 0
 outlier_floor = 0.6
 orderbook_min_plat = 8    # only fetch live /top orders for items whose stats-based value reaches this
+suspect_median_min_copies = 100  # own this many copies and the median is cross-checked:
+suspect_median_ratio = 0.5       # live sellers below this share of it -> median treated as fake sales
 
 [valuation]
 trade_cost_plat = 5

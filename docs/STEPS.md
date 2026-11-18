@@ -22,6 +22,9 @@ The plan in [PLAN.md](PLAN.md), split into steps that each end in a commit.
 - **Energize acceptance check (PLAN §10, M3):** with the plan's own formula and default config, the Nov-15 numbers (r0 7p, r5 130p) pick **fuse** (130 − 5 = 125p) over selling 21 rank-0 copies (21 × (7 − 5/3) = 112p). The plan's "21 × 7 = 147 > 130" left out trade costs. The engine follows the formula; `tests/test_engine.py` checks both regimes.
 - Statistics 404s are cached like normal responses, so reruns stay offline.
 
+- **Mods at rank 0 only (user decision, 2026-11-18):** PLAN §5.4's max-then-sell option is gone. Rank barely moves most mod prices and Endo is scarce, so every spare copy is priced and listed at rank 0.
+- **Fake-sales guard:** common mods (Revenge, Vitality, Ammo Drum…) showed 10–22p medians from a sale or two a day while live sellers asked 1–3p. The 0.6× troll floor was discarding those real asks. With 100+ copies owned and asks under 50% of the median, the median is ignored.
+
 ## Status
 
 All steps are implemented and committed. First real run (2026-11-16): 1121 items / 1841 (item, rank) pairs priced in 2650 calls (~18 min at 2.5 rps). Later runs inside the TTLs make 0 calls.

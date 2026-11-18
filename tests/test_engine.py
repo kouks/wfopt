@@ -13,7 +13,7 @@ from wfopt.engine.pricing import PriceQuote
 from wfopt.engine.sets import PartStock, decide_set, evaluate_sets
 from wfopt.engine.valuation import Market, listable_qty
 from wfopt.inventory.normalize import Holding
-from wfopt.market.catalog import CatalogItem
+from wfopt.market.catalog import Catalog, CatalogItem
 
 
 def item(slug, tags=(), max_rank=None, ducats=None, bulk=False):
@@ -191,37 +191,75 @@ def test_arcane_fuse_rows():
 # ---------------------------------------------------------------- mods
 
 
-def test_mod_max_then_sell_vs_sell_with_endo():
+def test_mods_only_priced_and_listed_at_rank_0():
+    # Even a max-rank-10 mod with a big max-rank price is never maxed or compared at max.
     m = item("primed_x", ["mod", "legendary"], 10)
-    cfg = Config()
-    # Maxing a legendary from 0 costs 40 * 1023 = 40,920 Endo = 102.3p at 2.5p/1000.
-    k = keep_mod(ci(m, MOD, {10: 1, 0: 1}))
-    rows = decide_mod(k, mkt({(m, 0): q("m", 0, 20), (m, 10): q("m", 10, 200)}, cfg))
-    assert rows[0].action == MAX and rows[0].net == pytest.approx(200 - 5 - 102.3)
-    rows = decide_mod(k, mkt({(m, 0): q("m", 0, 20), (m, 10): q("m", 10, 120)}, cfg))
-    assert rows[0].action == LIST and rows[0].rank == 0  # 15 > 120 - 5 - 102.3
+    k = keep_mod(ci(m, MOD, {10: 1, 3: 1, 0: 2}))  # keeper r10; spares: one r3 + two r0
+    rows = decide_mod(k, mkt({(m, 0): q("m", 0, 20), (m, 10): q("m", 10, 400)}))
+    assert [(r.action, r.rank, r.qty) for r in rows] == [(LIST, 0, 3)]
+    assert rows[0].price == 20 and "includes 1 ranked copy, listed at rank 0" in rows[0].note
+    assert not any(r.action == MAX for r in rows)
+
+
+def test_mod_rank0_needs_only():
+    from wfopt.engine.plan import price_needs
+
+    m = item("primed_x", ["mod", "legendary"], 10)
+    needs = price_needs([keep_mod(ci(m, MOD, {10: 2, 5: 1, 0: 4}))], Catalog([]))
+    assert [(n.rank, n.units, n.owned) for n in needs] == [(0, 6, 7)]
 
 
 def test_mod_cheap_copies_are_held():
     m = item("vitality", ["mod", "common"], 10)
     k = keep_mod(ci(m, MOD, {10: 1, 0: 500}))
-    rows = decide_mod(k, mkt({(m, 0): q("v", 0, 2), (m, 10): q("v", 10, 25)}))
+    rows = decide_mod(k, mkt({(m, 0): q("v", 0, 2)}))
     assert [r.action for r in rows] == [HOLD] and rows[0].qty == 500
-
-
-def test_mod_partial_rank_maxed():
-    m = item("mod", ["mod", "rare"], 5)
-    k = keep_mod(ci(m, MOD, {5: 1, 3: 1}))
-    rows = decide_mod(k, mkt({(m, 5): q("m", 5, 50)}))
-    assert rows[0].action == MAX and rows[0].qty == 1 and "max from rank 3" in rows[0].note
+    assert "not worth a trade" in rows[0].note
 
 
 def test_sell_to_top_buyer_when_bid_meets_price():
     m = item("mod", ["mod", "rare"], 5)
     k = keep_mod(ci(m, MOD, {5: 2}))
-    rows = decide_mod(k, mkt({(m, 5): q("m", 5, 50, ask=52, bid=55, bid_user="Buyer", bid_qty=5)}))
-    assert rows[0].action == SELL_TOP and rows[0].price == 55
-    assert rows[0].whisper == '/w Buyer Hi! I want to sell: "Mod" (rank 5) for 55 platinum. (warframe.market)'
+    rows = decide_mod(k, mkt({(m, 0): q("m", 0, 50, ask=52, bid=55, bid_user="Buyer", bid_qty=5)}))
+    assert rows[0].action == SELL_TOP and rows[0].price == 55 and rows[0].rank == 0
+    assert rows[0].whisper == '/w Buyer Hi! I want to sell: "Mod" (rank 0) for 55 platinum. (warframe.market)'
+
+
+# ---------------------------------------------------------------- fake-median guard
+
+
+def _book(*asks):
+    from wfopt.engine.pricing import Order
+
+    return [Order("sell", a, 10, 0, "ingame", f"s{a}") for a in asks], []
+
+
+def test_inflated_median_with_many_copies_uses_live_asks():
+    from wfopt.config import PricingCfg
+    from wfopt.engine.pricing import StatRow, build_quote, suggested_price
+    from datetime import datetime, timezone
+
+    now = datetime(2026, 11, 16, tzinfo=timezone.utc)
+    rows = ([StatRow(now, 2, 21.7, 0)], [])  # "Revenge": thin volume, 21.7p median
+    cfg = PricingCfg()
+    qq = build_quote("revenge", 0, stat_rows=rows, orders=_book(2, 2, 3), cfg=cfg, owned=983, now=now)
+    assert qq.median_suspect and qq.ask == 2 and suggested_price(qq, cfg) == 2
+    assert "looks like fake sales" in qq.flags[-1] and "983 copies" in qq.flags[-1]
+    # same market, but only a handful owned -> median trusted, cheap asks dropped as trolls as before
+    few = build_quote("revenge", 0, stat_rows=rows, orders=_book(2, 2, 3), cfg=cfg, owned=5, now=now)
+    assert not few.median_suspect and few.ask is None and suggested_price(few, cfg) == 22
+    # a real market (sellers at the median, e.g. Buzz Kill) is left alone even with many copies
+    real = build_quote("buzz", 0, stat_rows=([StatRow(now, 150, 13.3, 0)], []), orders=_book(15, 15), cfg=cfg, owned=500, now=now)
+    assert not real.median_suspect and suggested_price(real, cfg) == 15
+
+
+def test_fake_median_mod_row_ends_up_held():
+    m = item("ammo_drum", ["mod", "uncommon"], 5)
+    k = keep_mod(ci(m, MOD, {5: 1, 0: 1074}))
+    fake = q("a", 0, 16, ask=1)
+    fake.median_suspect = True
+    rows = decide_mod(k, mkt({(m, 0): fake}))
+    assert [r.action for r in rows] == [HOLD]  # 1p - 5p trade cost -> not worth a trade
 
 
 # ---------------------------------------------------------------- liquidity cap and plan
@@ -264,7 +302,7 @@ def test_bundle_bid_is_priced_per_unit():
 def test_sell_to_top_buyer_needs_enough_quantity():
     m = item("mod", ["mod", "rare"], 5)
     k = keep_mod(ci(m, MOD, {5: 4}))
-    rows = decide_mod(k, mkt({(m, 5): q("m", 5, 50, ask=52, bid=55, bid_user="Buyer", bid_qty=1)}))
+    rows = decide_mod(k, mkt({(m, 0): q("m", 0, 50, ask=52, bid=55, bid_user="Buyer", bid_qty=1)}))
     assert rows[0].action == LIST and "only wants 1" in rows[0].note
 
 

@@ -38,13 +38,14 @@ COLUMNS: list[tuple[str, str, Callable[[Row], Any]]] = [
     ("Plat/trade", "npt", lambda r: round(r.net_per_trade, 1) if r.action in TRADE_ACTIONS else ""),
     ("Trades", "trades", lambda r: r.trades),
     ("Ducats", "ducats", lambda r: r.ducats or ""),
+    ("Endo", "endo", lambda r: r.endo or ""),
     ("Your listing", "listing", lambda r: r.current_listing),
     ("WFM link", "url", lambda r: r.url),
     ("Notes", "notes", lambda r: r.note),
     ("Whisper top buyer", "whisper", lambda r: r.whisper),
 ]
 
-NUMERIC = {"priority", "qty", "rank", "price", "ask", "bid", "med7", "vol7", "net", "npt", "trades", "ducats"}
+NUMERIC = {"priority", "qty", "rank", "price", "ask", "bid", "med7", "vol7", "net", "npt", "trades", "ducats", "endo"}
 
 
 def row_values(r: Row) -> list[Any]:
@@ -94,6 +95,10 @@ class Report:
             "Net value (trade rows)": round(sum(r.net for r in tr), 1),
             "Trades needed": sum(r.trades for r in tr),
             "Ducats (kiosk rows)": sum(r.ducats for r in duc),
+            "Endo to spend / budget": (
+                f"{self.extra.get('endo_used', 0):,} / {self.extra['endo_budget']:,}"
+                if self.extra.get("endo_budget") is not None else f"{self.extra.get('endo_used', 0):,} / no limit"
+            ),
             "Rows held": sum(1 for r in self.rows if r.action == HOLD),
             "Daily trade budget": self.plan.budget,
             "Trades remaining today (from inventory)": self.trades_remaining,

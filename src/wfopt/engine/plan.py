@@ -10,7 +10,8 @@ from wfopt.engine.arcanes import decide_arcane
 from wfopt.engine.classify import ARCANE, MOD, PRIME, Classified
 from wfopt.engine.keep import KeepResult, arcane_units, compute_keep, keep_all
 from wfopt.engine.model import DUCATS, HOLD, TRADE_ACTIONS, Row
-from wfopt.engine.mods import decide_mod
+from wfopt.engine.keep import endo_to_max
+from wfopt.engine.mods import decide_mods
 from wfopt.engine.pricing import PriceQuote
 from wfopt.engine.sets import PartStock, decide_set
 from wfopt.engine.valuation import Market
@@ -80,13 +81,17 @@ def group_primes(keeps: list[KeepResult], catalog: Catalog) -> list[SetGroup]:
 def price_needs(keeps: list[KeepResult], catalog: Catalog) -> list[PriceNeed]:
     needs: dict[tuple[str, int | None], PriceNeed] = {}
 
-    def add(item: CatalogItem, rank: int | None, units: int, subtype: str | None = None, owned: int = 0) -> None:
+    def add(
+        item: CatalogItem, rank: int | None, units: int, subtype: str | None = None, owned: int = 0,
+        upgrade_endo: int | None = None,
+    ) -> None:
         key = (item.id, rank)
         if key in needs:
             old = needs[key]
-            needs[key] = PriceNeed(item, rank, old.units + units, subtype or old.subtype, max(owned, old.owned))
+            gate = old.upgrade_endo if upgrade_endo is None else upgrade_endo if old.upgrade_endo is None else min(old.upgrade_endo, upgrade_endo)
+            needs[key] = PriceNeed(item, rank, old.units + units, subtype or old.subtype, max(owned, old.owned), gate)
         else:
-            needs[key] = PriceNeed(item, rank, units, subtype, owned)
+            needs[key] = PriceNeed(item, rank, units, subtype, owned, upgrade_endo)
 
     for g in group_primes(keeps, catalog):
         for ps in g.parts:
@@ -110,8 +115,13 @@ def price_needs(keeps: list[KeepResult], catalog: Catalog) -> list[PriceNeed]:
             if s.get(m) or u_s >= arcane_units(m):
                 add(it, m, s.get(m, 0) + u_s // arcane_units(m), sub, owned)
         elif k.item.category == MOD:
-            # mods are only ever priced and listed at rank 0 (no Endo spent, rank barely moves the price)
             add(it, 0, sum(s.values()), sub, owned)
+            if m > 0:
+                # max rank only matters for spare maxed copies (free) or when maxing could pay per Endo;
+                # fetch_quotes checks the statistics before spending a call on the order book
+                spare = [r for r in s if r is not None and r < m]
+                gate = 0 if s.get(m) else min((endo_to_max(it.tags, r, m) for r in spare), default=0)
+                add(it, m, sum(s.values()), sub, owned, upgrade_endo=gate)
     return list(needs.values())
 
 
@@ -145,7 +155,10 @@ def build_rows(
     quotes: dict[tuple[str, int | None], PriceQuote],
     cfg: Config,
     strategy: str | None = None,
+    endo_available: int | None = None,
+    info: dict | None = None,
 ) -> list[Row]:
+    """`endo_available`: the player's Endo (FusionPoints); `info` receives the Endo budget summary."""
     mkt = Market(quotes, cfg, strategy)
     rows: list[Row] = []
     for g in group_primes(keeps, catalog):
@@ -155,8 +168,10 @@ def build_rows(
             continue
         if k.item.category == ARCANE:
             rows.extend(decide_arcane(k, mkt, cfg.scope.arcane_ranked_copies_fusable))
-        elif k.item.category == MOD:
-            rows.extend(decide_mod(k, mkt))
+    mod_rows, endo_info = decide_mods(keeps, mkt, endo_available)
+    rows.extend(mod_rows)
+    if info is not None:
+        info.update(endo_info)
     rows = [r for r in rows if r.qty > 0]
     score(rows, cfg)
     rows.sort(key=lambda r: (-r.priority, -r.net, r.name))

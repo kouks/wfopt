@@ -47,6 +47,8 @@ class PricingCfg:
     # more than `suspect_median_ratio` is treated as inflated, and live asks set the price instead.
     suspect_median_min_copies: int = 100
     suspect_median_ratio: float = 0.5
+    # A cheapest ask above this multiple of the 7-day median isn't where things sell: price from the median.
+    max_ask_over_median: float = 1.5
 
 
 @dataclass
@@ -55,6 +57,12 @@ class ValuationCfg:
     daily_trades: int = 0
     ducat_value_plat: float = 0.08
     endo_value_per_1000: float = 2.5
+    # Maxing mods: only when it returns at least this much extra plat per 1,000 Endo, and the
+    # gain per copy is at least min_max_gain_plat. Total Endo per run <= endo_budget_share of yours.
+    min_plat_per_1000_endo: float = 8
+    min_max_gain_plat: float = 3
+    endo_budget_share: float = 0.25
+    min_max_rank_sales_per_day: float = 0.5  # maxing needs a real max-rank market
     bulk_units_per_trade: int = 3
     horizon_days: float = 7
     share: float = 0.2

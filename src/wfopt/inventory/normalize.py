@@ -35,6 +35,7 @@ class Holdings:
     skipped_rivens: int
     mastery_rank: int | None
     trades_remaining: int | None
+    endo: int | None = None  # FusionPoints
 
     def counts_by_source(self) -> Counter[str]:
         c: Counter[str] = Counter()
@@ -118,4 +119,4 @@ def normalize(inv: dict[str, Any]) -> Holdings:
         v = inv.get(k)
         return int(v) if isinstance(v, (int, float)) else None
 
-    return Holdings(items, rivens, _int("PlayerLevel"), _int("TradesRemaining"))
+    return Holdings(items, rivens, _int("PlayerLevel"), _int("TradesRemaining"), _int("FusionPoints"))

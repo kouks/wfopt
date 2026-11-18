@@ -41,7 +41,8 @@ The auction search is rate limited much more strictly than the rest of the API (
 ## Notes
 
 - Keep rules: every prime part is surplus. For mods and arcanes, one max-rank copy is kept (equipped copies count toward it).
-- Mods are only ever priced and listed at rank 0. Spare ranked copies are sold as rank-0 listings, and mods are never maxed with Endo.
+- Mods sell at rank 0 by default (spare ranked copies go out as rank-0 listings). A mod is maxed only when it earns at least `valuation.min_plat_per_1000_endo` (8p) extra per 1,000 Endo and its max-rank copies sell at least `min_max_rank_sales_per_day` (0.5) times a day. Endo per run is capped at `endo_budget_share` (25%) of your Endo, read from the inventory, and goes to the best plat per Endo first. Spare copies that are already maxed list at whichever rank nets more.
+- If the cheapest seller asks more than `pricing.max_ask_over_median` (1.5×) the 7-day median, the price comes from the median, since nothing sells at that ask.
 - Fake-sales guard: if you own at least `pricing.suspect_median_min_copies` (100) copies of an item and live sellers start below `suspect_median_ratio` (50%) of the 7-day median, the median is treated as fake and the price follows live sellers.
 - `scope.never_sell = ["overextended", ...]` keeps every copy of those items (slugs or display names, any case). Use it for mods you run at several ranks.
 - `--yes` refuses if the draft is older than `sync.draft_max_age_minutes` (60), was made for another account, `--limit` or `--strategy`, or your WFM listings changed since. Run the dry run again in that case.

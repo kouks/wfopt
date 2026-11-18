@@ -27,12 +27,17 @@ outlier_floor = 0.6
 orderbook_min_plat = 8    # only fetch live /top orders for items whose stats-based value reaches this
 suspect_median_min_copies = 100  # own this many copies and the median is cross-checked:
 suspect_median_ratio = 0.5       # live sellers below this share of it -> median treated as fake sales
+max_ask_over_median = 1.5        # cheapest ask above 1.5x the median -> price from the median
 
 [valuation]
 trade_cost_plat = 5
 daily_trades = 0          # 0 = use your Mastery Rank from the inventory file
 ducat_value_plat = 0.08
 endo_value_per_1000 = 2.5
+min_plat_per_1000_endo = 8  # max a mod only if it earns this much extra per 1,000 Endo
+min_max_gain_plat = 3       # ...and at least this much extra per copy
+endo_budget_share = 0.25    # spend at most this share of your Endo per run
+min_max_rank_sales_per_day = 0.5  # only max mods whose max-rank copies actually sell
 bulk_units_per_trade = 3
 horizon_days = 7
 share = 0.2

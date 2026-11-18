@@ -19,6 +19,9 @@ class PriceNeed:
     units: int  # surplus units this quote would price, for deciding whether the order book is worth a call
     subtype: str | None = None
     owned: int = 0  # copies the player owns, for the fake-median check
+    # Max-rank mod quotes: Endo to max the cheapest spare copy (0 = a spare is already maxed).
+    # The quote is only kept if the statistics say maxing could pass the plat-per-Endo threshold.
+    upgrade_endo: int | None = None
 
     @property
     def key(self) -> tuple[str, int | None]:
@@ -93,6 +96,20 @@ def worth_orderbook(med7: float | None, units: int, min_plat: float) -> bool:
     return med7 * min(max(units, 1), 3) >= min_plat
 
 
+def max_rank_worth_checking(n: PriceNeed, qmax: PriceQuote, hist, cfg: Config, now: datetime | None) -> bool:
+    """Statistics-only pre-check for a mod's max-rank price, before spending a call on its order book."""
+    if qmax.med7 is None:
+        return False
+    if n.upgrade_endo and qmax.vol7 < cfg.valuation.min_max_rank_sales_per_day:
+        return False  # maxing needs a real max-rank market
+    q0 = build_quote(n.item.slug, 0, stat_rows=hist, orders=None, cfg=cfg.pricing, subtype=n.subtype, now=now)
+    gain = qmax.med7 - (q0.med7 or 0)
+    if n.upgrade_endo == 0:  # a spare is already maxed: worth comparing whenever max sells for more
+        return gain > 0
+    v = cfg.valuation
+    return gain >= v.min_max_gain_plat and gain / (n.upgrade_endo / 1000) >= v.min_plat_per_1000_endo
+
+
 def fetch_quotes(
     cfg: Config,
     needs: list[PriceNeed],
@@ -114,6 +131,10 @@ def fetch_quotes(
     quotes: dict[tuple[str, int | None], PriceQuote] = {}
     for n in needs:
         q = build_quote(n.item.slug, n.rank, stat_rows=hist[n.item.id], orders=None, cfg=cfg.pricing, subtype=n.subtype, now=now)
+        if n.upgrade_endo is not None and not max_rank_worth_checking(n, q, hist[n.item.id], cfg, now):
+            if progress:
+                progress("book")
+            continue
         if worth_orderbook(q.med7, n.units, cfg.pricing.orderbook_min_plat):
             orders = book.top(n.item, n.rank, n.subtype, refresh=refresh)
             q = build_quote(

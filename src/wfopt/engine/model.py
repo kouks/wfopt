@@ -32,6 +32,7 @@ class Row:
     net: float = 0.0
     trades: int = 0
     ducats: int = 0
+    endo: int = 0  # Endo needed (Max then list)
     url: str = ""
     notes: list[str] = field(default_factory=list)
     whisper: str = ""

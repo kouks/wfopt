@@ -62,7 +62,8 @@ def run(
         cfg, needs, V1StatsSource(client, ttl.statistics), TopOrdersSource(client, ttl.top_orders),
         refresh=refresh, now=now, progress=step("prices", len({n.item.id for n in needs}) + len(needs)),
     )
-    rows = build_rows(keeps, catalog, quotes, cfg, strategy)
+    endo_info: dict = {}
+    rows = build_rows(keeps, catalog, quotes, cfg, strategy, holdings.endo, endo_info)
     listings = fetch_user_listings(client, cfg)
     if listings is not None:
         annotate_listings(rows, listings)
@@ -82,7 +83,7 @@ def run(
         quotes=quotes,
         listings=listings,
         network_calls=client.network_calls,
-        extra={"never_sell_unknown": unknown_never_sell(cfg, catalog)},
+        extra={"never_sell_unknown": unknown_never_sell(cfg, catalog), **endo_info},
     )
 
 

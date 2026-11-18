@@ -201,12 +201,90 @@ def test_mods_only_priced_and_listed_at_rank_0():
     assert not any(r.action == MAX for r in rows)
 
 
-def test_mod_rank0_needs_only():
+def test_mod_needs_rank0_plus_gated_max():
     from wfopt.engine.plan import price_needs
 
     m = item("primed_x", ["mod", "legendary"], 10)
-    needs = price_needs([keep_mod(ci(m, MOD, {10: 2, 5: 1, 0: 4}))], Catalog([]))
-    assert [(n.rank, n.units, n.owned) for n in needs] == [(0, 6, 7)]
+    needs = {n.rank: n for n in price_needs([keep_mod(ci(m, MOD, {10: 2, 5: 1, 0: 4}))], Catalog([]))}
+    assert (needs[0].units, needs[0].owned, needs[0].upgrade_endo) == (6, 7, None)
+    assert needs[10].upgrade_endo == 0  # a spare is already maxed -> always worth comparing
+    needs = {n.rank: n for n in price_needs([keep_mod(ci(m, MOD, {10: 1, 5: 1, 0: 4}))], Catalog([]))}
+    assert needs[10].upgrade_endo == 40 * (1024 - 32)  # cheapest spare to max is the rank-5 copy
+
+
+# ---------------------------------------------------------------- maxing mods with an Endo budget
+
+
+def _endo_cfg():
+    cfg = Config()
+    assert cfg.valuation.min_plat_per_1000_endo == 8 and cfg.valuation.endo_budget_share == 0.25
+    return cfg
+
+
+def test_rank5_mod_maxed_when_it_pays_per_endo():
+    from wfopt.engine.mods import decide_mods
+
+    m = item("ubri_kaneph", ["mod", "rare"], 5)  # 930 Endo to max from 0
+    k = keep_mod(ci(m, MOD, {5: 1, 0: 3}))
+    rows, info = decide_mods([k], mkt({(m, 0): q("u", 0, 6), (m, 5): q("u", 5, 34)}, _endo_cfg()), endo_available=124813)
+    mx = [r for r in rows if r.action == MAX]
+    # gain = (34-5) - (6-5) = 28p per copy for 930 Endo -> ~30p per 1,000 Endo
+    assert mx and mx[0].qty == 3 and mx[0].rank == 5 and mx[0].endo == 3 * 930
+    assert "30p per 1,000 Endo" in mx[0].note
+    assert info["endo_budget"] == 31203 and info["endo_used"] == 2790
+
+
+def test_rank10_and_mecha_overdrive_stay_rank0():
+    from wfopt.engine.mods import decide_mods
+
+    r10 = item("healing_return", ["mod", "rare"], 10)  # 30,690 Endo, +70p -> ~2p per 1,000 Endo
+    mecha = item("mecha_overdrive", ["mod", "rare"], 5)  # 930 Endo, 21p -> 27p: +6p -> ~6p per 1,000 Endo
+    quotes = {(r10, 0): q("h", 0, 6), (r10, 10): q("h", 10, 76), (mecha, 0): q("m", 0, 21), (mecha, 5): q("m", 5, 27)}
+    keeps = [keep_mod(ci(r10, MOD, {10: 1, 0: 2})), keep_mod(ci(mecha, MOD, {5: 1, 0: 2}))]
+    rows, info = decide_mods(keeps, mkt(quotes, _endo_cfg()), endo_available=124813)
+    assert {(r.slug, r.action, r.rank) for r in rows} == {("healing_return", LIST, 0), ("mecha_overdrive", LIST, 0)}
+    assert info["endo_used"] == 0
+
+
+def test_endo_budget_goes_to_best_plat_per_endo():
+    from wfopt.engine.mods import decide_mods
+
+    a = item("a_mod", ["mod", "rare"], 5)  # 930 Endo, +28p -> 30p/1k
+    b = item("b_mod", ["mod", "common"], 5)  # 310 Endo, +4p -> 13p/1k
+    quotes = {(a, 0): q("a", 0, 6), (a, 5): q("a", 5, 34), (b, 0): q("b", 0, 6), (b, 5): q("b", 5, 10)}
+    keeps = [keep_mod(ci(a, MOD, {5: 1, 0: 2})), keep_mod(ci(b, MOD, {5: 1, 0: 2}))]
+    rows, info = decide_mods(keeps, mkt(quotes, _endo_cfg()), endo_available=4 * (2 * 930))  # budget 1,860
+    by = {(r.slug, r.action): r for r in rows}
+    assert by[("a_mod", MAX)].qty == 2 and ("b_mod", MAX) not in by  # all budget to the better ratio
+    assert "Endo budget is used up" in by[("b_mod", LIST)].note
+    assert info["endo_used"] == 1860
+
+
+def test_spare_maxed_copy_listed_at_max_without_endo():
+    m = item("mod", ["mod", "rare"], 5)
+    k = keep_mod(ci(m, MOD, {5: 2, 0: 1}))
+    rows = decide_mod(k, mkt({(m, 0): q("m", 0, 17), (m, 5): q("m", 5, 30)}))
+    assert [(r.action, r.rank, r.qty, r.endo) for r in rows] == [(LIST, 5, 1, 0), (LIST, 0, 1, 0)]
+
+
+def test_max_rank_precheck_skips_order_book():
+    from datetime import datetime, timezone
+
+    from wfopt.engine.pricing import StatRow
+    from wfopt.market.prices import PriceNeed, max_rank_worth_checking
+
+    now = datetime(2026, 11, 16, tzinfo=timezone.utc)
+    cfg = _endo_cfg()
+    m = item("x", ["mod", "rare"], 5)
+
+    def check(med0, medm, endo):
+        hist = ([StatRow(now, 5, med0, 0), StatRow(now, 5, medm, 5)], [])
+        qm = PriceQuote("x", 5, med7=medm, vol7=5 / 7)
+        return max_rank_worth_checking(PriceNeed(m, 5, 1, upgrade_endo=endo), qm, hist, cfg, now)
+
+    assert check(6, 34, 930)  # 28p / 0.93k
+    assert not check(21, 27, 930)  # 6p / 0.93k = 6.5 < 8
+    assert check(21, 27, 0) and not check(27, 21, 0)  # spare already maxed: compare whenever max is higher
 
 
 def test_mod_cheap_copies_are_held():
@@ -325,3 +403,27 @@ def test_never_sell_keeps_every_copy(catalog):
     rows = build_rows(list(keeps.values()), catalog, {}, cfg)
     assert not any(r.slug in ("primed_continuity", "arcane_energize", "vasto_prime_barrel") for r in rows)
     assert unknown_never_sell(cfg, catalog) == ["typo mod"]
+
+
+def test_ask_far_above_median_prices_from_median():
+    from datetime import datetime, timezone
+
+    from wfopt.config import PricingCfg
+    from wfopt.engine.pricing import StatRow, build_quote, suggested_price
+
+    now = datetime(2026, 11, 16, tzinfo=timezone.utc)
+    cfg = PricingCfg()
+    rows = ([StatRow(now, 4, 28, 5)], [])  # "Cordon" r5: sells ~28p
+    qq = build_quote("cordon", 5, stat_rows=rows, orders=_book(500), cfg=cfg, now=now)
+    assert qq.ask_far_above and suggested_price(qq, cfg) == 28 and "far above" in qq.flags[-1]
+    ok = build_quote("cordon", 5, stat_rows=rows, orders=_book(35), cfg=cfg, now=now)  # 1.25x: normal
+    assert not ok.ask_far_above and suggested_price(ok, cfg) == 35
+
+
+def test_no_maxing_without_max_rank_sales():
+    from wfopt.engine.mods import decide_mods
+
+    m = item("auto_omni", ["mod", "uncommon"], 5)  # one max-rank sale in a week
+    k = keep_mod(ci(m, MOD, {5: 1, 0: 2}))
+    rows, info = decide_mods([k], mkt({(m, 0): q("a", 0, 8), (m, 5): q("a", 5, 40, vol=1 / 7)}, Config()), 124813)
+    assert [(r.action, r.rank) for r in rows] == [(LIST, 0)] and info["endo_used"] == 0

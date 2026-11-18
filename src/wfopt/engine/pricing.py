@@ -73,6 +73,7 @@ class PriceQuote:
     stats_ok: bool = False
     orderbook_ok: bool = False
     median_suspect: bool = False  # median looks like fake sales; live asks set the price
+    ask_far_above: bool = False  # cheapest ask is far above the median; the median sets the price
     flags: list[str] = field(default_factory=list)
 
     @property
@@ -174,6 +175,14 @@ def build_quote(
             q.bid, q.bid_user = round(b.unit, 2), b.ingame_name
             q.bid_qty, q.bid_per_trade, q.bid_platinum = b.quantity, b.per_trade, b.platinum
         check_median(q, sells, cfg, owned, own_name)
+        if (
+            not q.median_suspect and q.med7 and q.ask is not None
+            and cfg.max_ask_over_median > 0 and q.ask > cfg.max_ask_over_median * q.med7
+        ):
+            q.ask_far_above = True
+            q.flags.append(
+                f"cheapest seller asks {q.ask:g}p, far above the 7-day median {q.med7:.0f}p: pricing from the median"
+            )
     return q
 
 
@@ -199,7 +208,7 @@ def check_median(q: PriceQuote, sells: list[Order], cfg: PricingCfg, owned: int,
 def suggested_price(q: PriceQuote, cfg: PricingCfg, strategy: str | None = None) -> int | None:
     """List price for one unit under the chosen strategy, or None if there is no market."""
     strategy = strategy or cfg.strategy
-    med, ask, bid = (None if q.median_suspect else q.med7), q.ask, q.bid
+    med, ask, bid = (None if q.median_suspect else q.med7), (None if q.ask_far_above else q.ask), q.bid
     if med is None and ask is None and bid is None:
         return None
     if med is None:
